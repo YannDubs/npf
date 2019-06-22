@@ -1,0 +1,7 @@
+skorch
+torch
+torchvision
+matplotlib
+tqdm
+scikit-learn
+joblib
