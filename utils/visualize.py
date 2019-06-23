@@ -164,6 +164,7 @@ def plot_posterior_samples(dataset, model,
                            test_min_max=None,
                            is_force_cntxt_extrap=False,
                            is_plot_generator=True,
+                           is_true_func=True,
                            **kwargs):
     """
     Plot the mean at `n_trgt` different points samples if `test_min_max` for
@@ -186,7 +187,7 @@ def plot_posterior_samples(dataset, model,
     X_cntxt, Y_cntxt = X[:, idcs, :], Y[:, idcs, :]
 
     ax = plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt,
-                                         true_func=(X, Y),
+                                         true_func=(X, Y) if is_true_func else None,
                                          is_plot_std=is_plot_std,
                                          train_min_max=dataset.min_max,
                                          test_min_max=test_min_max,
