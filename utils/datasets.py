@@ -56,15 +56,19 @@ class GPDataset(Dataset):
         self.n_points = n_points
         self.min_max = min_max
         self.n_diff_kernel_hyp = n_diff_kernel_hyp
+        self._check_n_samples(n_samples)
+
+        if n_diff_kernel_hyp == 1:
+            # only fit hyperparam when predicting if using various hyperparam
+            kwargs["optimizer"] = None
         self.generator = GaussianProcessRegressor(kernel=kernel,
                                                   alpha=0.001,  # numerical stability for preds
-                                                  # only fit hyperparam when predicting if using various hyperparam
-                                                  optimizer=n_diff_kernel_hyp != 1,
                                                   **kwargs)
         self.data, self.targets = self.precompute_data()
 
-        if n_samples % n_diff_kernel_hyp != 0:
-            raise ValueError("n_samples={} has to be dividable by n_diff_kernel_hyp={}.".format(n_samples, n_diff_kernel_hyp))
+    def _check_n_samples(self, n_samples):
+        if n_samples % self.n_diff_kernel_hyp != 0 and n_samples != 1:
+            raise ValueError("n_samples={} has to be dividable by n_diff_kernel_hyp={} or 1.".format(n_samples, self.n_diff_kernel_hyp))
 
     def __len__(self):
         return self.n_samples
@@ -109,14 +113,19 @@ class GPDataset(Dataset):
         if self.n_diff_kernel_hyp == 1:
             targets = self.generator.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
         else:
-            targets = np.empty((n_samples, n_points))
-            for i in range(self.n_diff_kernel_hyp):
+            if n_samples == 1:
                 self.sample_kernel_()
-                # interleaves all arrays (maybe better than concat and shuffle)
-                targets[i::self.n_diff_kernel_hyp, :
-                        ] = self.generator.sample_y(X[:, np.newaxis],
-                                                    n_samples // self.n_diff_kernel_hyp
-                                                    ).transpose(1, 0)
+                targets = self.generator.sample_y(X[:, np.newaxis], n_samples
+                                                  ).transpose(1, 0)
+            else:
+                targets = np.empty((n_samples, n_points))
+                for i in range(self.n_diff_kernel_hyp):
+                    self.sample_kernel_()
+                    # interleaves all arrays (maybe better than concat and shuffle)
+                    targets[i::self.n_diff_kernel_hyp, :
+                            ] = self.generator.sample_y(X[:, np.newaxis],
+                                                        n_samples // self.n_diff_kernel_hyp
+                                                        ).transpose(1, 0)
 
         targets = torch.from_numpy(targets)
         targets = targets.view(n_samples, n_points, 1).float()
@@ -137,7 +146,8 @@ class GPDataset(Dataset):
         Parameters
         ----------
         n_samples : int, optional
-            Number of sampled function (i.e. batch size).
+            Number of sampled function (i.e. batch size). Has to be dividable
+            by n_diff_kernel_hyp or 1.
 
         test_min_max : float, optional
             Testing range. If `None` uses training one.
@@ -146,6 +156,8 @@ class GPDataset(Dataset):
             Number of points at which to evaluate f(x) for x in min_max. If None
             uses `self.n_points`.
         """
+        self._check_n_samples(n_samples)
+
         if test_min_max is None:
             test_min_max = self.min_max
         n_points = n_points if n_points is not None else self.n_points
