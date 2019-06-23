@@ -322,7 +322,7 @@ class AttentiveNeuralProcess(NeuralProcess):
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
         self.attender = get_attender(attention, self.x_transf_dim,
-                                     is_normalize=is_normalize, **kwargs)
+                                     is_normalize=is_normalize)
 
         self.reset_parameters()
 

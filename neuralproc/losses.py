@@ -11,8 +11,7 @@ class NeuralProcessLoss(nn.Module):
     Parameters
     ----------
     get_beta : callable, optional
-        Function which returns the weight of the kl divergence given `is_training`
-        .
+        Function which returns the weight of the kl divergence given `is_training`.
 
     References
     ----------
@@ -20,10 +19,9 @@ class NeuralProcessLoss(nn.Module):
         arXiv:1807.01622 (2018).
     """
 
-    def __init__(self, get_beta=lambda _: 1, is_mean=False):
+    def __init__(self, get_beta=lambda _: 1):
         super().__init__()
         self.get_beta = get_beta
-        self.is_mean = is_mean
 
     def forward(self, inputs, y=None, weight=None):
         """Compute the Neural Process Loss averaged over the batch.
@@ -41,20 +39,17 @@ class NeuralProcessLoss(nn.Module):
             Weight of every example. If None, every example is weighted by 1.
         """
         p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt = inputs
-        batch_size = Y_trgt.size(0)
+        batch_size, n_trgt, _ = Y_trgt.shape
 
-        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1)
-
-        if self.is_mean:
-            neg_log_like = neg_log_like.mean(-1)
-        else:
-            neg_log_like = neg_log_like.sum(-1)
+        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).mean(-1)
 
         if q_z_trgt is not None:
             # use latent variables and training
             # note that during validation the kl will actually be 0 because
             # we do not compute q_z_trgt
-            kl_loss = kl_divergence(q_z_trgt, q_z_cntxt).view(batch_size, -1).sum(-1)
+            kl_loss = kl_divergence(q_z_trgt, q_z_cntxt)
+            # kl is multivariate Gaussian => sum over all target but we want mean
+            kl_loss = kl_loss / n_trgt
         else:
             kl_loss = 0
 

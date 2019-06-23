@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from sklearn.gaussian_process.kernels import RBF
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.gaussian_process import GaussianProcessRegressor
 
 from neuralproc.utils.helpers import rescale_range
@@ -18,7 +18,7 @@ class GPDataset(Dataset):
 
     Parameters
     ----------
-    kernel : sklearn.gaussian_process.kernels
+    kernel : sklearn.gaussian_process.kernels or list
         The kernel specifying the covariance function of the GP. If None is
         passed, the kernel "1.0 * RBF(1.0)" is used as default.
 
@@ -31,25 +31,40 @@ class GPDataset(Dataset):
     n_points : int, optional
         Number of points at which to evaluate f(x) for x in min_max.
 
+    n_diff_kernel_hyp : int, optional
+        How many randomly sampled kernel hyperparameters to use per epoch. If
+        `n_diff_kernel_hyp = 1` all the samples will be sampled from a fixed kernel.
+        If `n_diff_kernel_hyp = n_samples`, every sample will be generated from
+        different kernel hyperparameters (will be slow). If not `None` the kernel
+        hyperparameters will be uniformly sampled in the bounds `*_bounds` of the
+        kernel (note that you should fix ALL hyperparameter bounds).
+
     kwargs:
         Additional arguments to `GaussianProcessRegressor`.
     """
 
     def __init__(self,
-                 kernel=1. * RBF(length_scale=1.),
-                 min_max=(-5, 5),
+                 kernel=(WhiteKernel(noise_level=.1, noise_level_bounds=(.1, .5)) +
+                         RBF(length_scale=.4, length_scale_bounds=(.1, 1.))),
+                 min_max=(-2, 2),
                  n_samples=1000,
                  n_points=100,
+                 n_diff_kernel_hyp=1,
                  **kwargs):
 
         self.n_samples = n_samples
         self.n_points = n_points
         self.min_max = min_max
+        self.n_diff_kernel_hyp = n_diff_kernel_hyp
         self.generator = GaussianProcessRegressor(kernel=kernel,
-                                                  alpha=0.001,  # make sure that can predict (numerical stability)
-                                                  optimizer=None,  # don't fit kernel hyperparam
+                                                  alpha=0.001,  # numerical stability for preds
+                                                  # only fit hyperparam when predicting if using various hyperparam
+                                                  optimizer=n_diff_kernel_hyp != 1,
                                                   **kwargs)
         self.data, self.targets = self.precompute_data()
+
+        if n_samples % n_diff_kernel_hyp != 0:
+            raise ValueError("n_samples={} has to be dividable by n_diff_kernel_hyp={}.".format(n_samples, n_diff_kernel_hyp))
 
     def __len__(self):
         return self.n_samples
@@ -65,10 +80,13 @@ class GPDataset(Dataset):
 
     def precompute_data(self):
         self.counter = 0
-        return self._precompute_helper(self.min_max, self.n_samples, self.n_points)
+        X = self._sample_features(self.min_max, self.n_points)
+        targets = self._sample_targets(X, self.n_samples)
+        X_processed = self._postprocessing_features(X, self.n_samples)
+        return X_processed, targets
 
-    def _precompute_helper(self, min_max, n_samples, n_points):
-        # sample from a grid
+    def _sample_features(self, min_max, n_points):
+        """Sample X with non uniform intervals, by sampling from and adding noise. """
         X = np.linspace(*min_max, n_points)
         # add noise (with standard deviation of "stepsize") to not be on a grid
         X += np.random.randn(*X.shape) * (min_max[1] - min_max[0]) / n_points
@@ -76,18 +94,42 @@ class GPDataset(Dataset):
         X = X.clip(min=min_max[0], max=min_max[1])
         # sort which is convenient for plotting
         X.sort()
+        return X
 
-        targets = self.generator.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
-        targets = torch.from_numpy(targets)
-        targets = targets.view(n_samples, n_points, 1).float()
-
+    def _postprocessing_features(self, X, n_samples):
+        """Convert the features to a tensor, rescale them to [-1,1] and expand."""
+        n_points = len(X)
         X = torch.from_numpy(X)
         X = X.view(1, -1, 1).expand(n_samples, n_points, 1).float()
-        # rescale features to [-1,1]
-        # uses `self.min_max` like that possible to precompute extrapolation data
         X = rescale_range(X, self.min_max, (-1, 1))
+        return X
 
-        return X, targets
+    def _sample_targets(self, X, n_samples):
+        n_points = len(X)
+        if self.n_diff_kernel_hyp == 1:
+            targets = self.generator.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
+        else:
+            targets = np.empty((n_samples, n_points))
+            for i in range(self.n_diff_kernel_hyp):
+                self.sample_kernel_()
+                # interleaves all arrays (maybe better than concat and shuffle)
+                targets[i::self.n_diff_kernel_hyp, :
+                        ] = self.generator.sample_y(X[:, np.newaxis],
+                                                    n_samples // self.n_diff_kernel_hyp
+                                                    ).transpose(1, 0)
+
+        targets = torch.from_numpy(targets)
+        targets = targets.view(n_samples, n_points, 1).float()
+        return targets
+
+    def sample_kernel_(self):
+        """
+        Modify inplace the kernel hyperparameters through uniform sampling in their
+        respective bounds.
+        """
+        K = self.generator.kernel
+        for hyperparam in K.hyperparameters:
+            K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})
 
     def extrapolation_samples(self, n_samples=1, test_min_max=None, n_points=None):
         """Return a batch of extrapolation
@@ -107,4 +149,7 @@ class GPDataset(Dataset):
         if test_min_max is None:
             test_min_max = self.min_max
         n_points = n_points if n_points is not None else self.n_points
-        return self._precompute_helper(test_min_max, n_samples, n_points)
+        X = self._sample_features(test_min_max, n_points)
+        targets = self._sample_targets(X, n_samples)
+        X_processed = self._postprocessing_features(X, n_samples)
+        return X_processed, targets

@@ -89,7 +89,7 @@ def plot_posterior_predefined_cntxt(model,
         X_cntxt_plot = X_cntxt.numpy()[0].flatten()
         X_cntxt_plot = rescale_range(X_cntxt_plot, (-1, 1), train_min_max)
 
-    alpha = 1 / (n_samples + 1)**0.5
+    alpha = 1 / (n_samples)**0.5
 
     y_min = 0
     y_max = 0
