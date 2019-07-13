@@ -42,7 +42,7 @@ def _rescale_ylim(y_min, y_max):
 
 def _get_p_y_pred(model, X_cntxt, Y_cntxt, X_target):
     if X_cntxt is not None:
-        p_y_pred, _, _, _ = model.forward_step(X_cntxt, Y_cntxt, X_target)
+        p_y_pred, *_ = model.forward_step(X_cntxt, Y_cntxt, X_target)
     else:
         z_sample = torch.randn((1, model.r_dim))
         r = z_sample.unsqueeze(1).expand(1, X_target.size(1), model.r_dim)

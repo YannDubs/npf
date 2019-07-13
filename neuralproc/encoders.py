@@ -1,86 +1,11 @@
 import torch
 import torch.nn as nn
 
-from neuralproc.utils.torchextend import MLP
+from neuralproc.predefined import MLP
 from neuralproc.utils.initialization import weights_init
-from neuralproc.utils.attention import get_attender
 
-__all__ = ["SelfAttentionBlock", "SinusoidalEncodings", "get_uninitialized_mlp",
-           "merge_flat_input"]
-
-
-def get_uninitialized_mlp(**kwargs):
-    return lambda *args, **kargs2: MLP(*args, **kwargs, **kargs2)
-
-
-class SelfAttentionBlock(nn.Module):
-    """Self Attention Layer.
-
-    Parameters
-    ----------
-    x_dim : int
-        Spatial input dimension.
-
-    y_dim : int
-        Value input dimension.
-
-    out_dim : int
-        Output dimension. If different than x_dim will do all the computation
-        with a size of `x_dim` and add a linear layer at the end to reshape.
-
-    n_attn_layers : int, optional
-        Number of self attention layers.
-
-    attention : {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
-                "euclidean", "cosine", "transformer"}, optional
-        Type of attention to use. More details in `get_attender`.
-
-    is_normalize : bool, optional
-        Whether qttention weights should sum to 1 (using softmax). If not weights
-        will be in [0,1] but not necessarily sum to 1.
-    """
-
-    def __init__(self, x_dim, y_dim, out_dim,
-                 n_attn_layers=2,
-                 attention="transformer",
-                 is_normalize=True,
-                 **kwargs):
-        super().__init__()
-        self.x_dim = x_dim
-        self.y_dim = y_dim
-        self.out_dim = out_dim
-
-        self.is_reshape_y = self.y_dim != self.x_dim
-        if self.is_reshape_y:
-            self.reshape_y = MLP(self.y_dim, self.x_dim)
-
-        self.attn_layers = nn.ModuleList([get_attender(attention, self.x_dim,
-                                                       is_normalize=is_normalize,
-                                                       **kwargs)
-                                          for _ in range(n_attn_layers)])
-
-        self.is_reshape_out = self.x_dim != self.out_dim
-        if self.is_reshape_out:
-            self.reshape_out = nn.Linear(x_dim, self.out_dim)
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        weights_init(self)
-
-    def forward(self, X, Y):
-        if self.is_reshape_y:
-            Y = self.reshape_y(Y)
-
-        out = Y + X
-
-        for attn_layer in self.attn_layers:
-            out = attn_layer(out, out, out)
-
-        if self.is_reshape_out:
-            out = self.reshape_out(out)
-
-        return out
+__all__ = ["RelativeSinusoidalEncodings", "SinusoidalEncodings",
+           "merge_flat_input", "discard_ith_arg"]
 
 
 class SinusoidalEncodings(nn.Module):
@@ -104,7 +29,7 @@ class SinusoidalEncodings(nn.Module):
         self.x_dim = x_dim
         # dimension of encoding for eacg x dimension
         self.sub_dim = out_dim // self.x_dim
-        # in attention is all you need used 10000 but 512 dim, try to keep the
+        # in "attention is all you need" used 10000 but 512 dim, try to keep the
         # same ratio regardless of dim
         self._C = 10000 * (self.sub_dim / 512)**2
 
@@ -127,9 +52,8 @@ class SinusoidalEncodings(nn.Module):
         x = x.view(-1, shape[-1])
         # will only be passed once to GPU because precomputed
         self.denom = self.denom.to(x.device)
-        # put x in a range which is similar to positions in NLP [1,201]
-        #x = (x.unsqueeze(-1) + 1)*100 + 1
-        x = x.unsqueeze(-1)
+        # put x in a range which is similar to positions in NLP [1,51]
+        x = (x.unsqueeze(-1) + 1) * 25 + 1
         out = x / self.denom
         out[:, :, 0::2] = torch.sin(out[:, :, 0::2])
         out[:, :, 1::2] = torch.cos(out[:, :, 1::2])
@@ -139,7 +63,58 @@ class SinusoidalEncodings(nn.Module):
         return out
 
 
+class RelativeSinusoidalEncodings(nn.Module):
+    """Return relative positions of inputs between [-1,1]."""
+
+    def __init__(self, x_dim, out_dim):
+        super().__init__()
+        self.pos_encoder = SinusoidalEncodings(x_dim, out_dim)
+        self.weight = nn.Linear(out_dim, out_dim, bias=False)
+
+    def forward(self, keys_pos, queries_pos):
+        # size=[batch_size, n_queries, n_keys, x_dim]
+        diff = keys_pos.unsqueeze(1) - queries_pos.unsqueeze(2)
+        # the differences will be between between -2 and 2
+        # we take absolute value (stationary assumption) to make it in [0,2]
+        # and remove 1 to be [-1,1] which is the range for `SinusoidalEncodings`
+        rel_pos_enc = self.pos_encoder(diff.abs() - 1)
+        out = self.weight(rel_pos_enc)
+
+        # when extrapolating will be some issues because the largest difference
+        # will be larger than seen during training, so mask these.
+        out = out * (diff.abs() < 2).float()
+
+        import pdb
+        pdb.set_trace()
+
+        return out
+
+
 # META ENCODERS
+class DiscardIthArg(nn.Module):
+    """
+    Helper module which discard the i^th argument of the constructor and forward,
+    before being given to `To`.
+    """
+
+    def __init__(self, *args, i=0, To=nn.Identity, **kwargs):
+        super().__init__()
+        self.i = i
+        self.destination = To(*self.filter_args(*args), **kwargs)
+
+    def filter_args(self, *args):
+        return [arg for i, arg in enumerate(args) if i != self.i]
+
+    def forward(self, *args, **kwargs):
+        return self.destination(*self.filter_args(*args), **kwargs)
+
+
+def discard_ith_arg(module, i, **kwargs):
+    def discarded_arg(*args, **kwargs2):
+        return DiscardIthArg(*args, i=i, To=module, **kwargs, **kwargs2)
+    return discarded_arg
+
+
 class MergeFlatAndNotFlatInputs(nn.Module):
     """
     Extend a module which takes takes a non flat input (e.g. images) such that it can
@@ -201,7 +176,7 @@ class MergeFlatAndNotFlatInputs(nn.Module):
         if self.is_sum_merge:
             flat_input = self.resizer(flat_input)
             # use activation becaus eif not 2 linear layers in a row => useless computation
-            out = self.resizer.activation(non_flat_out + flat_input)
+            out = torch.relu(non_flat_out + flat_input)
         else:
             out = torch.cat((non_flat_out, flat_input), dim=-1)
 
@@ -259,7 +234,7 @@ class MergeFlatInputs(nn.Module):
         if self.is_sum_merge:
             x2 = self.resizer(x2)
             # use activation becaus eif not 2 linear layers in a row => useless computation
-            out = self.resizer.activation(x1 + x2)
+            out = torch.relu(x1 + x2)
         else:
             out = torch.cat((x1, x2), dim=-1)
 
