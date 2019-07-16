@@ -1,10 +1,12 @@
+import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 from neuralproc.predefined import MLP
-from .initialization import weights_init
-from .helpers import backward_pdb
+from .initialization import weights_init, init_param_
+from .helpers import backward_pdb, mask_and_apply
 
 __all__ = ["SetConv", "MlpRBF", "GaussianRBF"]
 
@@ -26,7 +28,14 @@ class Diff2Dist(nn.Module):
         self.is_weight_dim = is_weight_dim and x_dim != 1
 
         if self.is_weight_dim:
-            self.weighter = nn.Linear(x_dim, x_dim, bias=False)
+            self.weighter = nn.Linear(x_dim, x_dim)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
+        if self.is_weight_dim:
+            # center the initialization to 1 => by default all weights close to 1
+            init_param_(self.weighter.weight, shift=1)
 
     def forward(self, diff):
 
@@ -52,32 +61,45 @@ class GaussianRBF(nn.Module):
     is_vanilla : bool, optional
         Whether to force the use of the vanilla setcnn.
 
+    max_dist : float, optional
+        Max distance between the closest query and target, used for intiialisation.
+
+    max_dist_weight : float, optional
+        Weight that should be given to a maximum distance. Note that min_dist_weight
+        is 1, so can also be seen as a ratio.
+
     kwargs :
         Additional arguents to `Diff2Dist`.
     """
 
-    def __init__(self, x_dim, is_normalize=True, is_vanilla=False, **kwargs):
+    def __init__(self, x_dim, is_normalize=True, is_vanilla=False, max_dist=1 / 256,
+                 max_dist_weight=0.5, **kwargs):
         super().__init__()
 
+        self.max_dist = max_dist
+        self.max_dist_weight = max_dist_weight
         self.is_normalize = is_normalize and not is_vanilla
         self.length_scale_param = nn.Parameter(torch.tensor([0.]))
         self.diff2dist = Diff2Dist(x_dim, **kwargs)
         self.reset_parameters()
 
     def reset_parameters(self):
-        # initial length param scale is 0 => sigma is softlplus(-1) ~= 0.3 =>
-        # prior that does "3 variations"
-        self.length_scale_param = nn.Parameter(torch.tensor([0.]))
+        weights_init(self)
+        # set the parameter depending on the weight to give to a maxmum distance
+        # query. i.e. exp(- (max_dist / sigma).pow(2)) = max_dist_weight
+        # => sigma = max_dist / sqrt(- log(max_dist_weight))
+        max_dist_sigma = self.max_dist / math.sqrt(- math.log(self.max_dist_weight))
+        # inverse_softplus : log(exp(y) - 1)
+        max_dist_param = math.log(math.exp(max_dist_sigma) - 1)
+        self.length_scale_param = nn.Parameter(torch.tensor([max_dist_param]))
 
     def forward(self, diff):
         dist = self.diff2dist(diff)
 
-        # small trick to reduce gradient of length scale (because if too small
-        # will be hard to recover)
-        length_scale_param = self.length_scale_param * 0.1 - 1
+        length_scale_param = self.length_scale_param
         # compute exponent making sure no division by 0
         sigma = 1e-5 + F.softplus(length_scale_param)
-        inp = - 0.5 * (dist / sigma).pow(2)
+        inp = - (dist / sigma).pow(2)
 
         if self.is_normalize:
             # don't use fraction because numerical instability => softmax tricks
@@ -111,37 +133,32 @@ class MlpRBF(nn.Module):
         Placeholder
     """
 
-    def __init__(self, x_dim,
-                 is_add_sin=True, is_abs_dist=True, window_size=2, **kwargs):
+    def __init__(self, x_dim, is_abs_dist=True, window_size=0.25, **kwargs):
         super().__init__()
         self.is_abs_dist = is_abs_dist
-        self.is_add_sin = is_add_sin
-        if self.is_add_sin:
-            self.linear = nn.Linear(x_dim, x_dim)
         self.window_size = window_size
-        inp_dim = x_dim * 2 if is_add_sin else x_dim
-        self.mlp = MLP(inp_dim, 1, n_hidden_layers=2, hidden_size=8)
+        self.mlp = MLP(x_dim, 1, n_hidden_layers=3, hidden_size=16)
         self.reset_parameters()
 
     def reset_parameters(self):
         weights_init(self)
 
     def forward(self, diff):
-        # select only points with distance less than window_size
-        mask = (diff.abs() < self.window_size).float()
+        abs_diff = diff.abs()
+
+        # select only points with distance less than window_size (for extrapolation + speed)
+        mask = (abs_diff < self.window_size)
 
         if self.is_abs_dist:
-            diff = diff.abs()
+            diff = abs_diff
 
-        if self.is_add_sin:
-            diff = torch.cat([diff, torch.sin(self.linear(diff))], dim=-1)
-
-        diff = diff * mask
-
-        weight = torch.relu(self.mlp(diff))
+        # sparse operation (apply only on mask) => 2-3x speedup
+        weight = mask_and_apply(diff, mask,
+                                lambda x: self.mlp(x.unsqueeze(1)).abs().squeeze())
+        weight = weight * mask.float()  # set to 0 points that are further than windo
 
         density = weight.sum(dim=-2, keepdim=True)
-        out = weight / (density + 1e-5)
+        out = weight / (density + 1e-5)  # don't divide by 0
 
         return out, density.squeeze(-1)
 
@@ -179,19 +196,24 @@ class SetConv(nn.Module):
     is_vanilla : bool, optional
         Whether to force the use of the vanilla setcnn.
 
+    max_dist : float, optional
+            Max distance between the closest query and target, used for intiialisation.
+
     kwargs :
         Additional arguments to `RadialBasisFunc`.
     """
 
     def __init__(self, x_dim, in_channels, out_channels,
-                 RadialBasisFunc=GaussianRBF,
+                 RadialBasisFunc=MlpRBF,
                  is_concat_density=True,
                  is_vanilla=False,
+                 max_dist=1 / 256,
                  **kwargs):
         super().__init__()
         self.in_channels = in_channels + is_concat_density
         self.out_channels = out_channels
-        self.radial_basis_func = RadialBasisFunc(x_dim, is_vanilla=is_vanilla, **kwargs)
+        self.radial_basis_func = RadialBasisFunc(x_dim, is_vanilla=is_vanilla,
+                                                 max_dist=max_dist, **kwargs)
         self.is_concat_density = is_concat_density
         self.is_vanilla = is_vanilla
 
@@ -223,7 +245,8 @@ class SetConv(nn.Module):
         queries = queries.unsqueeze(2)
         values = values.unsqueeze(1)
 
-        # size = [batch_size, n_queries, n_keys, 1]
+        # weight size = [batch_size, n_queries, n_keys, 1]
+        # density size = [batch_size, n_queries, 1]
         weight, density = self.radial_basis_func(keys - queries)
 
         # size = [batch_size, n_queries, value_size]
@@ -238,7 +261,9 @@ class SetConv(nn.Module):
 
         if self.is_concat_density:
             # same as using a smaller initialization to be close to 0.5 at start
-            density = torch.sigmoid(self.density_transform(-density) * 0.1)
+            # and remove 1 because if nto always positive => will saturate sigmoid
+            # detching because if has linear and sigma to change then high varince
+            density = torch.sigmoid(self.density_transform(density * 0.1 - 1))
             # don't normalize the density channel
             targets = torch.cat([targets, density], dim=-1)
 

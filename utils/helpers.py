@@ -42,3 +42,16 @@ def make_Xy_input(dataset, y=None):
         X = dataset
 
     return ({'X': X, "y": y}, y)
+
+
+def tuple_cont_to_cont_tuple(tuples):
+    """Converts a tuple of containers (list, tuple, dict) to a container of tuples."""
+    if isinstance(tuples[0], dict):
+        # assumes keys are correct
+        return {k: tuple(dic[k] for dic in tuples) for k in tuples[0].keys()}
+    elif isinstance(tuples[0], list):
+        return list(zip(*tuples))
+    elif isinstance(tuples[0], tuple):
+        return tuple(zip(*tuples))
+    else:
+        raise ValueError("Unkown conatiner type: {}.".format(type(tuples[0])))

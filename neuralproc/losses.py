@@ -22,7 +22,7 @@ class NeuralProcessLoss(nn.Module):
     def __init__(self, get_beta=lambda _: 1):
         super().__init__()
         self.get_beta = get_beta
-        self.printed = False
+        self.is_use_as_metric = False
 
     def forward(self, inputs, y=None, weight=None):
         """Compute the Neural Process Loss averaged over the batch.
@@ -39,10 +39,15 @@ class NeuralProcessLoss(nn.Module):
         weight: torch.Tensor, size = [batch_size,]
             Weight of every example. If None, every example is weighted by 1.
         """
+
         p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary = inputs
         batch_size, n_trgt, _ = Y_trgt.shape
 
         neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).mean(-1)
+
+        if self.is_use_as_metric:
+            # trick to use as metric => return log likelihood
+            return - neg_log_like.mean(dim=0)
 
         if q_z_trgt is not None:
             # use latent variables and training

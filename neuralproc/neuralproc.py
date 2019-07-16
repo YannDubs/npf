@@ -7,12 +7,12 @@ from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
 from neuralproc.predefined import MLP, CNN, UnetCNN
-from neuralproc.utils.initialization import weights_init
+from neuralproc.utils.initialization import weights_init, init_param_
 from neuralproc.utils.helpers import (min_max_scale, MultivariateNormalDiag,
-                                      change_param, rescale_range)
+                                      change_param)
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
-from neuralproc.utils.setcnn import SetConv
+from neuralproc.utils.setcnn import SetConv, GaussianRBF
 
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 
@@ -142,7 +142,8 @@ class NeuralProcess(nn.Module):
                                                                         XYEncoder,
                                                                         x_transf_dim,
                                                                         XEncoder,
-                                                                        is_use_x)
+                                                                        is_use_x,
+                                                                        r_dim)
 
         self.is_summary = is_summary
         self.get_cntxt_trgt = get_cntxt_trgt
@@ -179,10 +180,10 @@ class NeuralProcess(nn.Module):
     def reset_parameters(self):
         weights_init(self)
 
-    def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x):
+    def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
         # don't use `x` to be translation equivariant
-        dflt_sub_decoder = change_param(MLP, n_hidden_layers=4)
-        dflt_sub_xyencoder = change_param(MLP, n_hidden_layers=2)
+        dflt_sub_decoder = change_param(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
+        dflt_sub_xyencoder = change_param(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
 
         if not is_use_x:
             if Decoder is None:
@@ -195,7 +196,7 @@ class NeuralProcess(nn.Module):
             XEncoder = nn.Identity  # don't encode X
         else:
             if Decoder is None:
-                Decoder = discard_ith_arg(dflt_sub_decoder, i=0)  # depend only on r not x
+                Decoder = merge_flat_input(dflt_sub_decoder, is_sum_merge=True)
             if XYEncoder is None:
                 XYEncoder = merge_flat_input(dflt_sub_xyencoder, is_sum_merge=True)
 
@@ -255,6 +256,7 @@ class NeuralProcess(nn.Module):
             Latent distribution for the context points. `None` if
             `LatentEncoder=None` or not training.
         """
+
         R_det, z_sample, q_z_cntxt, q_z_trgt = None, None, None, None
 
         if self.encoded_path in ["latent", "both"]:
@@ -339,6 +341,7 @@ class NeuralProcess(nn.Module):
             Input to the decoder. `inp_dim` is `r_dim * 2 + x_dim` if
             `encoded_path == "both"` else `r_dim + x_dim`.
         """
+
         # size = [batch_size, n_trgt, x_transf_dim]
         X_transf = self.x_encoder(X_trgt)
 
@@ -349,7 +352,12 @@ class NeuralProcess(nn.Module):
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         scale_trgt = 0.1 + 0.9 * F.softplus(scale_trgt)
         p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
+
         return p_y
+
+    def set_extrapolation(self, min_max):
+        """Set the neural process for extrapolation. Useful for  child classes."""
+        pass
 
 
 class AttentiveNeuralProcess(NeuralProcess):
@@ -371,7 +379,9 @@ class AttentiveNeuralProcess(NeuralProcess):
         Whether to add some relative position encodings. If `True` the positional
         encoding of size `kq_size` should be given in the `forward pass`. Only possible
         if `attention` takes `is_relative_pos` as argument
-        (`{"multihead", "transformer"}`).
+        (`{"multihead", "transformer"}`). Note that still not equivarian because
+        use the position for the key and query.
+
 
     kwargs :
         Additional arguments to `NeuralProcess`.
@@ -388,10 +398,7 @@ class AttentiveNeuralProcess(NeuralProcess):
                  is_relative_pos=False,
                  **kwargs):
 
-        super().__init__(x_dim, y_dim,
-                         encoded_path=encoded_path,
-                         is_use_x=not is_relative_pos,  # don't use x when relative => equivariant
-                         **kwargs)
+        super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
         self.attender = get_attender(attention, self.x_transf_dim, self.r_dim,
                                      self.r_dim, is_relative_pos=is_relative_pos)
@@ -460,8 +467,11 @@ class GlobalNeuralProcess(NeuralProcess):
 
     is_use_x : bool, optional
         Whether to encode and use X in the representation (r_i) and when decoding.
-        If `False`, then `keys, values, queries = X_cntxt, Y_cntxt, X_trgt`
-        which guarantees translation equivariance.
+        If `False`, then guarantees translation equivariance (if add some
+        representation of the positional differences) or invariance.
+
+    is_encode_xy : bool, optional
+        Whether to encode x and y.
 
     kwargs :
         Additional arguments to `NeuralProcess`.
@@ -478,34 +488,47 @@ class GlobalNeuralProcess(NeuralProcess):
                                           is_double_conv=True,
                                           bottleneck=None,
                                           is_depth_separable=True,
-                                          Normalization=nn.BatchNorm1d,
+                                          Normalization=nn.Identity,
                                           is_chan_last=True,
                                           kernel_size=7),
-                 tmp_to_queries_attn=SetConv,
+                 tmp_to_queries_attn=change_param(SetConv, RadialBasisFunc=GaussianRBF),
                  is_skip_tmp=False,
                  is_use_x=False,
                  get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=False),
+                 is_encode_xy=False,
                  **kwargs):
 
+        self.is_skip_tmp = is_skip_tmp
         super().__init__(x_dim, y_dim,
                          encoded_path="deterministic",
                          get_cntxt_trgt=get_cntxt_trgt,
                          is_use_x=is_use_x,
                          **kwargs)
+        self.is_encode_xy = is_encode_xy
+        if not self.is_encode_xy:
+            self.xy_encoder = None
+            value_size = y_dim
+        else:
+            value_size = self.r_dim
 
-        self.is_skip_tmp = is_skip_tmp
         self.n_tmp_queries = n_tmp_queries
         self.tmp_queries = torch.linspace(-1, 1, self.n_tmp_queries)
         self.keys_to_tmp_attender = get_attender(keys_to_tmp_attn, self.x_transf_dim,
-                                                 self.r_dim, self.r_dim)
-        self.tmp_self_attn = TmpSelfAttn(self.r_dim)
-        self.tmp_to_queries_attn = get_attender(keys_to_tmp_attn, self.x_transf_dim,
-                                                self.r_dim, self.r_dim)
+                                                 value_size, self.r_dim)
+        if TmpSelfAttn is not None:
+            self.tmp_self_attn = TmpSelfAttn(self.r_dim)
+            self.tmp_to_queries_attn = get_attender(tmp_to_queries_attn, self.x_transf_dim,
+                                                    self.r_dim, self.r_dim)
+        else:
+            self.tmp_self_attn = None
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        weights_init(self)
+        super().reset_parameters()
+        if self.is_skip_tmp:
+            self.gate = torch.nn.Parameter(torch.tensor([0.] * self.r_dim))
+            init_param_(self.gate)
 
     def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
         """
@@ -518,15 +541,21 @@ class GlobalNeuralProcess(NeuralProcess):
         # size = [batch_size, n_cntxt, x_transf_dim]
         keys = self.x_encoder(X_cntxt)
 
-        # size = [batch_size, n_cntxt, r_dim]
-        values = self.xy_encoder(keys, Y_cntxt)
+        if self.is_encode_xy:
+            # size = [batch_size, n_cntxt, r_dim]
+            values = self.xy_encoder(keys, Y_cntxt)
+        else:
+            values = Y_cntxt
 
         # size = [batch_size, n_trgt, x_transf_dim]
         queries = self.x_encoder(X_trgt)
 
+        if self.tmp_self_attn is None:
+            # return a baseline without the tmp queries
+            return self.keys_to_tmp_attender(keys, queries, values), None
+
         # size = [batch_size, n_tmp_trgt, r_dim]
-        tmp_queries = tmp_queries.expand(X_cntxt.size(0),
-                                         self.n_tmp_queries, self.x_transf_dim)
+        tmp_queries = tmp_queries.expand(X_cntxt.size(0), tmp_queries.size(1), self.x_transf_dim)
 
         # size = [batch_size, n_tmp, r_dim]
         tmp_values = self.keys_to_tmp_attender(keys, tmp_queries, values)
@@ -538,11 +567,11 @@ class GlobalNeuralProcess(NeuralProcess):
         R_attn = self.tmp_to_queries_attn(tmp_queries, queries, tmp_values)
 
         if self.is_skip_tmp:
-            R_attn = R_attn + self.keys_to_tmp_attender(keys, queries, values)
+            R_attn = R_attn + torch.sigmoid(self.gate) * self.keys_to_tmp_attender(keys, queries, values)
 
         return torch.relu(R_attn), summary
 
-    def extend_tmp_queries(self, min_max):
+    def set_extrapolation(self, min_max):
         """
         Scale the temporary queries to be in a given range while keeping
         the same density than during training (used for extrapolation.).

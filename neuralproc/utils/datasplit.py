@@ -15,6 +15,29 @@ def get_all_indcs(batch_size, n_possible_points):
     return torch.arange(n_possible_points).expand(batch_size, n_possible_points)
 
 
+class GetRangeIndcs:
+    """Get all indices in a certain range."""
+
+    def __init__(self, arange):
+        self.arange = arange
+
+    def __call__(self, batch_size, n_possible_points):
+        indcs = torch.arange(*self.arange)
+        return indcs.expand(batch_size, len(indcs))
+
+
+class GetIndcsMerger:
+    """Meta indexer that merges indices from multiple indexers."""
+
+    def __init__(self, indexers):
+        self.indexers = indexers
+
+    def __call__(self, batch_size, n_possible_points):
+        indcs = [indexer(batch_size, n_possible_points) for indexer in self.indexers]
+        indcs = torch.cat(indcs, dim=1)
+        return indcs
+
+
 class GetRandomIndcs:
     """
     Return random subset of indices.
@@ -31,17 +54,25 @@ class GetRandomIndcs:
 
     is_batch_repeat : bool, optional
         Whether to use use the same indices for all elements in the batch.
+
+    range_indcs : tuple, optional
+        Range tuple (max, min) for the indices.
     """
 
     def __init__(self,
                  min_n_indcs=.1,
                  max_n_indcs=.5,
-                 is_batch_repeat=False):
+                 is_batch_repeat=False,
+                 range_indcs=None):
         self.min_n_indcs = min_n_indcs
         self.max_n_indcs = max_n_indcs
         self.is_batch_repeat = is_batch_repeat
+        self.range_indcs = range_indcs
 
     def __call__(self, batch_size, n_possible_points):
+        if self.range_indcs is not None:
+            n_possible_points = self.range_indcs[1] - self.range_indcs[0]
+
         min_n_indcs = ratio_to_int(self.min_n_indcs, n_possible_points)
         max_n_indcs = ratio_to_int(self.max_n_indcs, n_possible_points)
         # make sure select at least 1
@@ -56,6 +87,10 @@ class GetRandomIndcs:
                                         ).repeat(batch_size, axis=0)
             indep_shuffle_(indcs, -1)
             indcs = torch.from_numpy(indcs[:, :n_indcs])
+
+        if self.range_indcs is not None:
+            # adding is teh same as shifting
+            indcs += self.range_indcs[0]
 
         return indcs
 
@@ -73,16 +108,29 @@ class CntxtTrgtGetter:
         Get the context indices if not given directly (useful for training).
 
     is_add_cntxts_to_trgts : bool, optional
-        Whether to add the context points to the targets.
+        Whether to add the context points to the targets. If it is `False`
+        and `is_rm_cntxts_from_trgts` is also `False`, then the presence of cntxt in
+        trgt will be due to radnomness.
+
+    is_rm_cntxts_from_trgts : bool, optional
+        Whether to force remove the context from the target. If it is `False`
+        and `is_add_cntxts_to_trgts` is also `False`, then the presence of cntxt in
+        trgt will be due to radnomness.
     """
 
     def __init__(self,
                  contexts_getter=GetRandomIndcs(),
                  targets_getter=get_all_indcs,
-                 is_add_cntxts_to_trgts=True):
+                 is_add_cntxts_to_trgts=True,
+                 is_rm_cntxts_from_trgts=False):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
+        self.is_rm_cntxts_from_trgts = is_rm_cntxts_from_trgts
+        assert not(self.is_add_cntxts_to_trgts and self.is_rm_cntxts_from_trgts)
+
+        # temporary args that can be changed without chaning the real ones (tmp)
+        self.tmp_args = dict()
 
     def __call__(self, X, y=None, context_indcs=None, target_indcs=None):
         """
@@ -102,28 +150,55 @@ class CntxtTrgtGetter:
             Indices of the target points. If `None` generates it using
             `contexts_getter(batch_size, num_points)`.
         """
-        if context_indcs is None:
-            context_indcs = self.contexts_getter(*self.getter_inputs(X))
-        if target_indcs is None:
-            target_indcs = self.targets_getter(*self.getter_inputs(X))
+        is_add_cntxts_to_trgts = self.tmp_args.get("is_add_cntxts_to_trgts",
+                                                   self.is_add_cntxts_to_trgts)
+        is_rm_cntxts_from_trgts = self.tmp_args.get("is_rm_cntxts_from_trgts",
+                                                    self.is_rm_cntxts_from_trgts)
+        contexts_getter = self.tmp_args.get("contexts_getter", self.contexts_getter)
+        targets_getter = self.tmp_args.get("targets_getter", self.targets_getter)
 
-        if self.is_add_cntxts_to_trgts:
-            target_indcs = self.add_cntxts_to_trgts(X, target_indcs, context_indcs)
+        batch_size, num_points = self.getter_inputs(X)
+
+        if context_indcs is None:
+            context_indcs = contexts_getter(batch_size, num_points)
+        if target_indcs is None:
+            target_indcs = targets_getter(batch_size, num_points)
+
+        if is_add_cntxts_to_trgts:
+            target_indcs = self.add_cntxts_to_trgts(num_points, target_indcs, context_indcs)
+        elif is_rm_cntxts_from_trgts:
+            target_indcs = self.rm_cntxts_from_trgts(num_points, target_indcs, context_indcs)
 
         X_cntxt, Y_cntxt = self.select(X, y, context_indcs)
         X_trgt, Y_trgt = self.select(X, y, target_indcs)
         return X_cntxt, Y_cntxt, X_trgt, Y_trgt
 
-    def add_cntxts_to_trgts(self, X, target_indcs, context_indcs):
+    def add_cntxts_to_trgts(self, num_points, target_indcs, context_indcs):
         """
         Add context points to targets: has been shown emperically better.
         Note that this might results in duplicate indices in the targets.
         """
-        num_points = X.size(1)
         target_indcs = torch.cat([target_indcs, context_indcs], dim=-1)
         # to reduce the probability of duplicating indices remove context indices
         # that made target indices larger than n_possible_points
         return target_indcs[:, :num_points]
+
+    def rm_cntxts_from_trgts(self, num_points, target_indcs, context_indcs):
+        """
+        Remove context from targets.
+        """
+        batch_size = target_indcs.size(0)
+        mask = torch.zeros((batch_size, num_points)).byte()
+        targets_mask = mask.scatter(1, target_indcs, 1)
+        context_mask = mask.scatter(1, context_indcs, 1)
+        targets_mask = not_masks(targets_mask, context_mask)  # remove context
+        n_indcs = targets_mask.sum(dim=1).min()  # use minimum indcs
+
+        # slow
+        target_indcs = torch.stack([torch.nonzero(targets_mask[i, :]).squeeze()[:n_indcs]
+                                    for i in range(batch_size)])
+
+        return target_indcs.to(target_indcs.device)
 
     def getter_inputs(self, X):
         """Make the input for the getters."""
@@ -135,6 +210,18 @@ class CntxtTrgtGetter:
         batch_size, num_points, x_dim = X.shape
         indcs = indcs.to(X.device).unsqueeze(-1).expand(batch_size, -1, x_dim)
         return torch.gather(X, 1, indcs).contiguous(), torch.gather(y, 1, indcs).contiguous()
+
+    def reset(self):
+        """Reset all temporary arguments."""
+        self.tmp_args = dict()
+
+    def set_eval(self):
+        """Changes the target getter to get all interpolation not in context."""
+        if "targets_getter" not in self.tmp_args:
+            self.tmp_args["targets_getter"] = get_all_indcs
+
+        if "is_rm_cntxts_from_trgts" not in self.tmp_args:
+            self.tmp_args["is_rm_cntxts_from_trgts"] = True
 
 
 ### GRID AND MASKING ###
@@ -190,6 +277,12 @@ def and_masks(*masks):
 def or_masks(*masks):
     """Composes tuple of masks by an or operation."""
     mask = functools.reduce(lambda a, b: a | b, masks)
+    return mask
+
+
+def not_masks(mask, not_mask):
+    """Keep all elements in first mask that are nto in second."""
+    mask = and_masks(mask, ~not_mask)
     return mask
 
 
@@ -261,9 +354,13 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
                                 context_indcs=context_mask,
                                 target_indcs=target_mask)
 
-    def add_cntxts_to_trgts(self, X, target_mask, context_mask):
+    def add_cntxts_to_trgts(self, grid_shape, target_mask, context_mask):
         """Add context points to targets: has been shown emperically better."""
         return or_masks(target_mask, context_mask)
+
+    def rm_cntxts_from_trgts(self, grid_shape, target_mask, context_mask):
+        """Remove context points from targets."""
+        return not_masks(target_mask, context_mask)
 
     def getter_inputs(self, X):
         """Make the input for the getters."""
@@ -300,3 +397,11 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
         Y_masked = Y_masked.permute(0, 2, 1)
 
         return X_masked.contiguous(), Y_masked.contiguous()
+
+    def set_eval(self):
+        """Changes the target getter to get all interpolation not in context."""
+        if "targets_getter" not in self.tmp_args:
+            self.tmp_args["targets_getter"] = no_masker
+
+        if "is_rm_cntxts_from_trgts" not in self.tmp_args:
+            self.tmp_args["is_rm_cntxts_from_trgts"] = True

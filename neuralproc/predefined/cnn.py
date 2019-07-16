@@ -122,6 +122,7 @@ class CNN(nn.Module):
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             # normalization and residual
             X = self.activation_(norm(conv(X))) + X
+
         return X, None
 
 

@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from neuralproc.predefined import MLP
 from neuralproc.utils.initialization import weights_init
+from neuralproc.utils.helpers import mask_and_apply
 
 __all__ = ["RelativeSinusoidalEncodings", "SinusoidalEncodings",
            "merge_flat_input", "discard_ith_arg"]
@@ -66,26 +67,25 @@ class SinusoidalEncodings(nn.Module):
 class RelativeSinusoidalEncodings(nn.Module):
     """Return relative positions of inputs between [-1,1]."""
 
-    def __init__(self, x_dim, out_dim):
+    def __init__(self, x_dim, out_dim, window_size=2):
         super().__init__()
         self.pos_encoder = SinusoidalEncodings(x_dim, out_dim)
         self.weight = nn.Linear(out_dim, out_dim, bias=False)
+        self.window_size = window_size
+        self.out_dim = out_dim
 
     def forward(self, keys_pos, queries_pos):
         # size=[batch_size, n_queries, n_keys, x_dim]
-        diff = keys_pos.unsqueeze(1) - queries_pos.unsqueeze(2)
-        # the differences will be between between -2 and 2
-        # we take absolute value (stationary assumption) to make it in [0,2]
-        # and remove 1 to be [-1,1] which is the range for `SinusoidalEncodings`
-        rel_pos_enc = self.pos_encoder(diff.abs() - 1)
-        out = self.weight(rel_pos_enc)
+        diff = (keys_pos.unsqueeze(1) - queries_pos.unsqueeze(2)).abs()
 
-        # when extrapolating will be some issues because the largest difference
-        # will be larger than seen during training, so mask these.
-        out = out * (diff.abs() < 2).float()
+        # the abs differences will be between between 0, self.window_size
+        # we multipl by 2/self.window_size then remove 1 to  be [-1,1] which is
+        # the range for `SinusoidalEncodings`
+        scaled_diff = diff * 2 / self.window_size - 1
+        out = self.weight(self.pos_encoder(scaled_diff))
 
-        import pdb
-        pdb.set_trace()
+        # set to 0 points that are further than window for extap
+        out = out * (diff < self.window_size).float()
 
         return out
 

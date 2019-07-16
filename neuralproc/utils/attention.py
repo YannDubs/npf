@@ -14,7 +14,8 @@ from .initialization import weights_init
 __all__ = ["get_attender"]
 
 
-def get_attender(attention, kq_size, value_size, out_size, is_normalize=True, **kwargs):
+def get_attender(attention, kq_size, value_size, out_size, is_normalize=True,
+                 is_relative_pos=False, **kwargs):
     """
     Set scorer that matches key and query to compute attention along `dim=1`.
 
@@ -88,9 +89,11 @@ def get_attender(attention, kq_size, value_size, out_size, is_normalize=True, **
                                     is_weight=True, p=1,
                                     is_normalize=is_normalize, **kwargs)
     elif attention == "multihead":
-        attender = MultiheadAttender(kq_size, value_size, out_size, **kwargs)
+        attender = MultiheadAttender(kq_size, value_size, out_size,
+                                     is_relative_pos=is_relative_pos, **kwargs)
     elif attention == "transformer":
-        attender = TransformerAttender(kq_size, value_size, out_size, **kwargs)
+        attender = TransformerAttender(kq_size, value_size, out_size,
+                                       is_relative_pos=is_relative_pos, **kwargs)
     else:
         raise ValueError("Unknown attention method {}".format(attention))
 
@@ -137,7 +140,7 @@ class BaseAttender(abc.ABC, nn.Module):
     def reset_parameters(self):
         weights_init(self)
 
-    def forward(self, keys, queries, values, **kwargs):
+    def forward(self, keys, queries, values, rel_pos_enc=None, **kwargs):
         """
         Compute the attention between given key and queries.
 
@@ -361,7 +364,7 @@ class DistanceAttender(BaseAttender):
         self.p = p
         self.is_weight = is_weight
         if self.is_weight:
-            self.weighter = nn.Linear(self.kq_size, self.kq_size, bias=False)
+            self.weighter = nn.Linear(self.kq_size, self.kq_size)
 
         self.reset_parameters()
 
@@ -375,7 +378,7 @@ class DistanceAttender(BaseAttender):
         if self.is_weight:
             diff = self.weighter(diff)
 
-        logits = - torch.norm(diff, p=self.p, dim=-1)
+        logits = - torch.norm(diff, p=self.p, dim=-1)**2
 
         return logits
 
@@ -432,8 +435,8 @@ class MultiheadAttender(nn.Module):
         self.post_processor = (nn.Linear(value_size, out_size)
                                if is_post_process or value_size != out_size else None)
 
-        assert kq_size % n_heads == 0
-        assert value_size % n_heads == 0
+        assert kq_size % n_heads == 0, "{} % {} != 0".format(kq_size, n_heads)
+        assert value_size % n_heads == 0, "{} % {} != 0".format(value_size, n_heads)
         self.reset_parameters()
 
     def reset_parameters(self):

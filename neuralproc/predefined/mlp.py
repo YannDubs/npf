@@ -9,7 +9,7 @@ __all__ = ["MLP"]
 
 
 class MLP(nn.Module):
-    """General MLP class.
+    """General MLP class with residual.
 
     Parameters
     ----------
@@ -31,6 +31,12 @@ class MLP(nn.Module):
 
     dropout: float, optional
         Dropout rate.
+
+    is_force_hid_smaller : bool, optional
+        Whether to force the hidden dimensions to be smaller than in and out.
+
+    is_res : bool, optional
+        Whether to use residual connections.
     """
 
     def __init__(self, input_size, output_size,
@@ -38,15 +44,22 @@ class MLP(nn.Module):
                  n_hidden_layers=1,
                  Activation=nn.ReLU,
                  bias=True,
-                 dropout=0):
+                 dropout=0,
+                 is_force_hid_smaller=False,
+                 is_res=False):
         super().__init__()
 
         self.input_size = input_size
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.n_hidden_layers = n_hidden_layers
+        self.is_res = is_res
 
-        if self.hidden_size < min(self.output_size, self.input_size):
+        if is_force_hid_smaller and self.hidden_size > max(self.output_size, self.input_size):
+            self.hidden_size = max(self.output_size, self.input_size)
+            txt = "hidden_size={} larger than output={} and input={}. Setting it to {}."
+            warnings.warn(txt.format(hidden_size, output_size, input_size, self.hidden_size))
+        elif self.hidden_size < min(self.output_size, self.input_size):
             self.hidden_size = min(self.output_size, self.input_size)
             txt = "hidden_size={} smaller than output={} and input={}. Setting it to {}."
             warnings.warn(txt.format(hidden_size, output_size, input_size, self.hidden_size))
@@ -64,14 +77,17 @@ class MLP(nn.Module):
     def forward(self, x):
         out = self.to_hidden(x)
         self.activation_(out)
-        out = self.dropout(out)
+        x = self.dropout(out)
 
         for linear in self.linears:
-            out = linear(out)
+            out = linear(x)
             self.activation_(out)
+            if self.is_res:
+                out = out + x
             out = self.dropout(out)
+            x = out
 
-        out = self.out(out)
+        out = self.out(x)
         return out
 
     def reset_parameters(self):
