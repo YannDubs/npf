@@ -20,7 +20,8 @@ torch.set_num_threads(N_THREADS)
 from neuralproc import GlobalNeuralProcess
 from neuralproc.utils.helpers import change_param
 from neuralproc.utils.datasplit import CntxtTrgtGetter, GetRandomIndcs
-from neuralproc.predefined import UnetCNN
+from neuralproc.predefined import CNN
+from neuralproc.utils.setcnn import SetConv, MlpRBF, GaussianRBF
 
 from ntbks_helpers import get_gp_datasets, get_gp_datasets_varying, train_all_models_
 
@@ -44,19 +45,22 @@ get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=contexts_getter,
                                  is_add_cntxts_to_trgts=False)  # don't context points to tagrtes
 
 ### Models ###
-gnp_kwargs = dict(r_dim=16,
-                  get_cntxt_trgt=get_cntxt_trgt,
-                  TmpSelfAttn=change_param(UnetCNN,
+gnp_kwargs = dict(r_dim=32,
+                  keys_to_tmp_attn=change_param(SetConv, is_vanilla=True,
+                                                RadialBasisFunc=GaussianRBF),
+                  TmpSelfAttn=change_param(CNN,
                                            Conv=torch.nn.Conv1d,
-                                           Pool=torch.nn.MaxPool1d,
-                                           upsample_mode="linear",
-                                           n_layers=14,
-                                           is_double_conv=True,
-                                           bottleneck=None,
-                                           is_depth_separable=True,
-                                           Normalization=torch.nn.BatchNorm1d,
+                                           n_layers=3,
+                                           is_depth_separable=True, # onyl diff with vanilla
+                                           Normalization=torch.nn.Identity,
                                            is_chan_last=True,
-                                           kernel_size=7))
+                                           kernel_size=11),
+                  tmp_to_queries_attn=change_param(SetConv, is_vanilla=True,
+                                                   RadialBasisFunc=GaussianRBF),
+                  is_skip_tmp=False,
+                  is_use_x=False,
+                  get_cntxt_trgt=get_cntxt_trgt,
+                  is_encode_xy=False)
 
 # initialize one model for each dataset
 data_models = {name: (GlobalNeuralProcess(X_DIM, Y_DIM, **gnp_kwargs), data)
@@ -64,6 +68,6 @@ data_models = {name: (GlobalNeuralProcess(X_DIM, Y_DIM, **gnp_kwargs), data)
 
 ### Training ###
 info = train_all_models_(data_models,
-                         "results/attn_conv_compare/data_1D/run_k{}/extended_gnp_large".format(args.run),
-                         is_retrain=True,
-                         is_progress_bar=False)  # if false load precomputed
+                         "results/attn_conv_compare/data_1D/run_k{}/extended_gnp_simple_only_depthsep".format(args.run),
+                         is_retrain=True,  # if false load precomputed
+                         is_progress_bar=False)

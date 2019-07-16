@@ -20,8 +20,8 @@ torch.set_num_threads(N_THREADS)
 from neuralproc import GlobalNeuralProcess
 from neuralproc.utils.helpers import change_param
 from neuralproc.utils.datasplit import CntxtTrgtGetter, GetRandomIndcs
-from neuralproc.utils.setcnn import SetConv, GaussianRBF
 from neuralproc.predefined import CNN
+from neuralproc.utils.setcnn import SetConv, MlpRBF, GaussianRBF
 
 from ntbks_helpers import get_gp_datasets, get_gp_datasets_varying, train_all_models_
 
@@ -47,7 +47,7 @@ get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=contexts_getter,
 ### Models ###
 gnp_kwargs = dict(r_dim=32,
                   keys_to_tmp_attn=change_param(SetConv, is_vanilla=True,
-                                                RadialBasisFunc=GaussianRBF),
+                                                RadialBasisFunc=MlpRBF),  # onyl diff with vanilla
                   TmpSelfAttn=change_param(CNN,
                                            Conv=torch.nn.Conv1d,
                                            n_layers=3,
@@ -68,6 +68,6 @@ data_models = {name: (GlobalNeuralProcess(X_DIM, Y_DIM, **gnp_kwargs), data)
 
 ### Training ###
 info = train_all_models_(data_models,
-                         "results/attn_conv_compare/data_1D/run_k{}/vanilla_gnp".format(args.run),
-                         is_retrain=True,
-                         is_progress_bar=False)  # if false load precomputed
+                         "results/attn_conv_compare/data_1D/run_k{}/extended_gnp_simple_only_mlp".format(args.run),
+                         is_retrain=True,  # if false load precomputed
+                         is_progress_bar=False)

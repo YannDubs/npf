@@ -17,13 +17,12 @@ import torch
 N_THREADS = 8
 torch.set_num_threads(N_THREADS)
 
-from neuralproc import GlobalNeuralProcess
+from neuralproc import AttentiveNeuralProcess
 from neuralproc.utils.helpers import change_param
 from neuralproc.utils.datasplit import CntxtTrgtGetter, GetRandomIndcs
-from neuralproc.utils.setcnn import SetConv, GaussianRBF
-from neuralproc.predefined import CNN
 
-from ntbks_helpers import get_gp_datasets, get_gp_datasets_varying, train_all_models_
+from ntbks_helpers import (get_gp_datasets, get_gp_datasets_varying,
+                           train_all_models_, CNP_KWARGS)
 
 
 parser = ArgumentParser()
@@ -45,29 +44,18 @@ get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=contexts_getter,
                                  is_add_cntxts_to_trgts=False)  # don't context points to tagrtes
 
 ### Models ###
-gnp_kwargs = dict(r_dim=32,
-                  keys_to_tmp_attn=change_param(SetConv, is_vanilla=True,
-                                                RadialBasisFunc=GaussianRBF),
-                  TmpSelfAttn=change_param(CNN,
-                                           Conv=torch.nn.Conv1d,
-                                           n_layers=3,
-                                           is_depth_separable=False,
-                                           Normalization=torch.nn.Identity,
-                                           is_chan_last=True,
-                                           kernel_size=11),
-                  tmp_to_queries_attn=change_param(SetConv, is_vanilla=True,
-                                                   RadialBasisFunc=GaussianRBF),
-                  is_skip_tmp=False,
-                  is_use_x=False,
-                  get_cntxt_trgt=get_cntxt_trgt,
-                  is_encode_xy=False)
+ANP_KWARGS = dict(get_cntxt_trgt=get_cntxt_trgt,
+                  r_dim=32,
+                  encoded_path="deterministic",  # use CNP
+                  attention="transformer",
+                  is_relative_pos=True)
 
 # initialize one model for each dataset
-data_models = {name: (GlobalNeuralProcess(X_DIM, Y_DIM, **gnp_kwargs), data)
+data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
                for name, data in datasets.items()}
 
 ### Training ###
 info = train_all_models_(data_models,
-                         "results/attn_conv_compare/data_1D/run_k{}/vanilla_gnp".format(args.run),
+                         "results/attn_conv_compare/data_1D/run_k{}/extended_anp_rel".format(args.run),
                          is_retrain=True,
                          is_progress_bar=False)  # if false load precomputed

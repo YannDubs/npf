@@ -17,12 +17,13 @@ import torch
 N_THREADS = 8
 torch.set_num_threads(N_THREADS)
 
-from neuralproc import AttentiveNeuralProcess
+from neuralproc import GlobalNeuralProcess
 from neuralproc.utils.helpers import change_param
 from neuralproc.utils.datasplit import CntxtTrgtGetter, GetRandomIndcs
+from neuralproc.predefined import UnetCNN
+from neuralproc.utils.setcnn import SetConv, GaussianRBF
 
-from ntbks_helpers import (get_gp_datasets, get_gp_datasets_varying,
-                           train_all_models_, CNP_KWARGS)
+from ntbks_helpers import get_gp_datasets, get_gp_datasets_varying, train_all_models_
 
 
 parser = ArgumentParser()
@@ -44,18 +45,23 @@ get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=contexts_getter,
                                  is_add_cntxts_to_trgts=False)  # don't context points to tagrtes
 
 ### Models ###
-ANP_KWARGS = CNP_KWARGS.copy()
-ANP_KWARGS["encoded_path"] = "deterministic"
-ANP_KWARGS["attention"] = "transformer"
-ANP_KWARGS["is_relative_pos"] = True
-ANP_KWARGS["r_dim"] = 128
+gnp_kwargs = dict(r_dim=32,
+                  keys_to_tmp_attn=change_param(SetConv,
+                                                RadialBasisFunc=change_param(GaussianRBF,
+                                                                             max_dist_weight=0.7)),
+                  TmpSelfAttn=None,
+                  tmp_to_queries_attn=torch.nn.Identity,
+                  is_skip_tmp=False,
+                  is_use_x=False,
+                  get_cntxt_trgt=get_cntxt_trgt,
+                  is_encode_xy=False)
 
 # initialize one model for each dataset
-data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
+data_models = {name: (GlobalNeuralProcess(X_DIM, Y_DIM, **gnp_kwargs), data)
                for name, data in datasets.items()}
 
 ### Training ###
 info = train_all_models_(data_models,
-                         "results/attn_conv_compare/data_1D/run_k{}/extended_anp_large".format(args.run),
+                         "results/attn_conv_compare/data_1D/run_k{}/baseline_rbf".format(args.run),
                          is_retrain=True,
                          is_progress_bar=False)  # if false load precomputed

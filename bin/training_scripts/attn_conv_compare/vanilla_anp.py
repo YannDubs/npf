@@ -38,19 +38,20 @@ datasets = get_gp_datasets(n_samples=N_SAMPLES, n_points=N_POINTS)
 datasets.update(get_gp_datasets_varying(n_samples=N_SAMPLES, n_points=N_POINTS))
 
 contexts_getter = GetRandomIndcs(min_n_indcs=0.01, max_n_indcs=.5)
-targets_getter = GetRandomIndcs(min_n_indcs=0.5, max_n_indcs=0.99)
+targets_getter = GetRandomIndcs(min_n_indcs=0.01, max_n_indcs=0.5)
 get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=contexts_getter,
                                  targets_getter=targets_getter,
-                                 is_add_cntxts_to_trgts=False)  # don't context points to tagrtes
+                                 is_add_cntxts_to_trgts=True)
 
 ### Models ###
-ANP_KWARGS = CNP_KWARGS.copy()
-ANP_KWARGS["encoded_path"] = "deterministic"
-ANP_KWARGS["attention"] = "multiheaded"
-ANP_KWARGS["r_dim"] = 128
+anp_kwargs = dict(r_dim=32,
+                  get_cntxt_trgt=get_cntxt_trgt,
+                  encoded_path="deterministic",
+                  attention="multihead",
+                  is_relative_pos=False)
 
 # initialize one model for each dataset
-data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
+data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **anp_kwargs), data)
                for name, data in datasets.items()}
 
 ### Training ###
