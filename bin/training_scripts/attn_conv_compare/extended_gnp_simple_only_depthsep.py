@@ -35,8 +35,9 @@ X_DIM = 1  # 1D spatial input
 Y_DIM = 1  # 1D regression
 N_POINTS = 128
 N_SAMPLES = 100000  # this is a lot and can work with less
-datasets = get_gp_datasets(n_samples=N_SAMPLES, n_points=N_POINTS)
-datasets.update(get_gp_datasets_varying(n_samples=N_SAMPLES, n_points=N_POINTS))
+N_DIFF_HYP = 1000
+datasets = get_gp_datasets_varying(n_samples=N_SAMPLES, n_points=N_POINTS,
+                                   n_diff_kernel_hyp=N_DIFF_HYP, save_file='data/gp_dataset.hdf5')
 
 contexts_getter = GetRandomIndcs(min_n_indcs=0.01, max_n_indcs=.5)
 targets_getter = GetRandomIndcs(min_n_indcs=0.5, max_n_indcs=0.99)
@@ -51,7 +52,7 @@ gnp_kwargs = dict(r_dim=32,
                   TmpSelfAttn=change_param(CNN,
                                            Conv=torch.nn.Conv1d,
                                            n_layers=3,
-                                           is_depth_separable=True, # onyl diff with vanilla
+                                           is_depth_separable=True,  # onyl diff with vanilla
                                            Normalization=torch.nn.Identity,
                                            is_chan_last=True,
                                            kernel_size=11),

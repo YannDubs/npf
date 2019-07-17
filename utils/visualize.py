@@ -184,9 +184,9 @@ def plot_posterior_samples(dataset, model,
     """
     if n_points is None:
         n_points = dataset.n_points
-    X, Y = dataset.extrapolation_samples(n_samples=1,
-                                         test_min_max=test_min_max,
-                                         n_points=n_points)
+    X, Y = dataset.get_samples(n_samples=1,
+                               test_min_max=test_min_max,
+                               n_points=n_points)
     # randomly subset for context
     idcs = torch.randperm(n_points)[:n_cntxt]
 

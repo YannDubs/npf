@@ -1,15 +1,20 @@
 import math
 import sys
+import os
+import logging
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.gaussian_process import GaussianProcessRegressor
+import h5py
 
 from neuralproc.utils.helpers import rescale_range
 
 __all__ = ["GPDataset"]
+
+logging.basicConfig(level=logging.INFO)
 
 
 class GPDataset(Dataset):
@@ -35,9 +40,16 @@ class GPDataset(Dataset):
         How many randomly sampled kernel hyperparameters to use per epoch. If
         `n_diff_kernel_hyp = 1` all the samples will be sampled from a fixed kernel.
         If `n_diff_kernel_hyp = n_samples`, every sample will be generated from
-        different kernel hyperparameters (will be slow). If not `None` the kernel
+        different kernel hyperparameters (will be slow). If not `1` the kernel
         hyperparameters will be uniformly sampled in the bounds `*_bounds` of the
         kernel (note that you should fix ALL hyperparameter bounds).
+
+    save_file : string or tuple of strings, optional
+        Where to save and load the dataset. If tuple `(file, group)`, save in
+        the hdf5 under the given group. If `None` regenerate samples indefinitely.
+        Note that if the saved dataset has been completely used,
+        it will generate a new sub-dataset for every epoch and save it for future
+        use.
 
     kwargs:
         Additional arguments to `GaussianProcessRegressor`.
@@ -50,6 +62,8 @@ class GPDataset(Dataset):
                  n_samples=1000,
                  n_points=100,
                  n_diff_kernel_hyp=1,
+                 save_file=None,
+                 logging_level=logging.INFO,
                  **kwargs):
 
         self.n_samples = n_samples
@@ -57,14 +71,20 @@ class GPDataset(Dataset):
         self.min_max = min_max
         self.n_diff_kernel_hyp = n_diff_kernel_hyp
         self._check_n_samples(n_samples)
+        self.logger = logging.getLogger('GPDataset')
+        self.logger.setLevel(logging_level)
+        self.save_file = save_file
+
+        self._idx_precompute = 0  # current index of precomputed data
+        self._idx_chunk = 0  # current chunk (i.e. epoch)
 
         if n_diff_kernel_hyp == 1:
             # only fit hyperparam when predicting if using various hyperparam
             kwargs["optimizer"] = None
         self.generator = GaussianProcessRegressor(kernel=kernel,
-                                                  alpha=0.001,  # numerical stability for preds
+                                                  alpha=0.005,  # numerical stability for preds
                                                   **kwargs)
-        self.data, self.targets = self.precompute_data()
+        self.precompute_chunk_()
 
     def _check_n_samples(self, n_samples):
         if n_samples % self.n_diff_kernel_hyp != 0 and n_samples != 1:
@@ -77,17 +97,58 @@ class GPDataset(Dataset):
         # doesn't use index because randomly gnerated in any case => sample
         # in order which enables to know when epoch is finished and regenerate
         # new functions
-        self.counter += 1
-        if self.counter == self.n_samples:
-            self.data, self.targets = self.precompute_data()
-        return self.data[self.counter], self.targets[self.counter]
+        self._idx_precompute += 1
+        if self._idx_precompute == self.n_samples:
+            self.precompute_chunk_()
+        return self.data[self._idx_precompute], self.targets[self._idx_precompute]
 
-    def precompute_data(self):
-        self.counter = 0
-        X = self._sample_features(self.min_max, self.n_points)
-        targets = self._sample_targets(X, self.n_samples)
-        X_processed = self._postprocessing_features(X, self.n_samples)
-        return X_processed, targets
+    def get_samples(self, n_samples=None, test_min_max=None,
+                    n_points=None, save_file=None, idx_chunk=None):
+        """Return a batch of samples
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of sampled function (i.e. batch size). Has to be dividable
+            by n_diff_kernel_hyp or 1. If `None` uses `self.n_samples`.
+
+        test_min_max : float, optional
+            Testing range. If `None` uses training one.
+
+        n_points : int, optional
+            Number of points at which to evaluate f(x) for x in min_max. If None
+            uses `self.n_points`.
+
+        save_file : string or tuple of strings, optional
+            Where to save and load the dataset. If tuple `(file, group)`, save in
+            the hdf5 under the given group. If `None` uses does not save.
+
+        idx_chunk : int, optional
+            Index of the current chunk. This is used when `save_file` is not None,
+            and you want to save a single dataset through multiple calls to
+            `get_samples`.
+        """
+        test_min_max = test_min_max if test_min_max is not None else self.min_max
+        n_points = n_points if n_points is not None else self.n_points
+        n_samples = n_samples if n_samples is not None else self.n_samples
+        self._check_n_samples(n_samples)
+
+        try:
+            data, targets = _load_chunk(save_file, idx_chunk)
+        except NotLoadedError:
+            X = self._sample_features(test_min_max, n_points)
+            targets = self._sample_targets(X, n_samples)
+            data = self._postprocessing_features(X, n_samples)
+            _save_chunk(data, targets, save_file, idx_chunk, logger=self.logger)
+
+        return data, targets
+
+    def precompute_chunk_(self):
+        """Load or precompute and save a chunk (data for an epoch.)"""
+        self._idx_precompute = 0
+        self.data, self.targets = self.get_samples(save_file=self.save_file,
+                                                   idx_chunk=self._idx_chunk)
+        self._idx_chunk += 1
 
     def _sample_features(self, min_max, n_points):
         """Sample X with non uniform intervals, by sampling from and adding noise. """
@@ -140,28 +201,54 @@ class GPDataset(Dataset):
         for hyperparam in K.hyperparameters:
             K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})
 
-    def extrapolation_samples(self, n_samples=1, test_min_max=None, n_points=None):
-        """Return a batch of extrapolation
 
-        Parameters
-        ----------
-        n_samples : int, optional
-            Number of sampled function (i.e. batch size). Has to be dividable
-            by n_diff_kernel_hyp or 1.
+def _parse_save_file_chunk(save_file, idx_chunk):
+    if save_file is None:
+        save_file, save_group = None, None
+    elif isinstance(save_file, tuple):
+        save_file, save_group = save_file[0], save_file[1] + "/"
+    elif isinstance(save_file, str):
+        save_file, save_group = save_file, ""
+    else:
+        raise ValueError("Unsupported type of save_file={}.".format(save_file))
 
-        test_min_max : float, optional
-            Testing range. If `None` uses training one.
+    if idx_chunk is not None:
+        chunk_suffix = "_chunk_{}".format(idx_chunk)
+    else:
+        chunk_suffix = ""
 
-        n_points : int, optional
-            Number of points at which to evaluate f(x) for x in min_max. If None
-            uses `self.n_points`.
-        """
-        self._check_n_samples(n_samples)
+    return save_file, save_group, chunk_suffix
 
-        if test_min_max is None:
-            test_min_max = self.min_max
-        n_points = n_points if n_points is not None else self.n_points
-        X = self._sample_features(test_min_max, n_points)
-        targets = self._sample_targets(X, n_samples)
-        X_processed = self._postprocessing_features(X, n_samples)
-        return X_processed, targets
+
+class NotLoadedError(Exception):
+    pass
+
+
+def _load_chunk(save_file, idx_chunk):
+    save_file, save_group, chunk_suffix = _parse_save_file_chunk(save_file, idx_chunk)
+
+    if save_file is None or not os.path.exists(save_file):
+        raise NotLoadedError()
+
+    try:
+        with h5py.File(save_file, 'r') as hf:
+            data = torch.from_numpy(hf["{}data{}".format(save_group, chunk_suffix)][:])
+            targets = torch.from_numpy(hf["{}targets{}".format(save_group, chunk_suffix)][:])
+    except KeyError:
+        raise NotLoadedError()
+
+    return data, targets
+
+
+def _save_chunk(data, targets, save_file, idx_chunk, logger=None):
+    save_file, save_group, chunk_suffix = _parse_save_file_chunk(save_file, idx_chunk)
+
+    if save_file is None:
+        return  # don't save
+
+    if logger is not None:
+        logger.info("Saving group {} chunk {} for future use ...".format(save_group, idx_chunk))
+
+    with h5py.File(save_file, 'a') as hf:
+        hf.create_dataset("{}data{}".format(save_group, chunk_suffix), data=data.numpy())
+        hf.create_dataset("{}targets{}".format(save_group, chunk_suffix), data=targets.numpy())
