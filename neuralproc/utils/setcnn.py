@@ -269,4 +269,4 @@ class SetConv(nn.Module):
 
         targets = self.resizer(targets)
 
-        return targets
+        return targets#, density

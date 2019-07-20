@@ -7,6 +7,10 @@ import numpy as np
 from .helpers import ratio_to_int, prod, indep_shuffle_
 
 
+def precomputed_cntxt_trgt_split(X_cntxt, y_cntxt, X_trgt, y_trgt):
+    return X_cntxt, y_cntxt, X_trgt, y_trgt
+
+
 ### INDICES SELECTORS ###
 def get_all_indcs(batch_size, n_possible_points):
     """

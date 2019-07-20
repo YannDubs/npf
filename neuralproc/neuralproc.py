@@ -558,13 +558,13 @@ class GlobalNeuralProcess(NeuralProcess):
         tmp_queries = tmp_queries.expand(X_cntxt.size(0), tmp_queries.size(1), self.x_transf_dim)
 
         # size = [batch_size, n_tmp, r_dim]
-        tmp_values = self.keys_to_tmp_attender(keys, tmp_queries, values)
+        tmp_values = self.keys_to_tmp_attender(keys, tmp_queries, values)  # , density
         tmp_values = torch.relu(tmp_values)
-        tmp_values, summary = self.tmp_self_attn(tmp_values)
+        tmp_values, summary = self.tmp_self_attn(tmp_values)  # , density)
         tmp_values = torch.relu(tmp_values)
 
         # size = [batch_size, n_trgt, r_dim]
-        R_attn = self.tmp_to_queries_attn(tmp_queries, queries, tmp_values)
+        R_attn = self.tmp_to_queries_attn(tmp_queries, queries, tmp_values)  # _
 
         if self.is_skip_tmp:
             R_attn = R_attn + torch.sigmoid(self.gate) * self.keys_to_tmp_attender(keys, queries, values)

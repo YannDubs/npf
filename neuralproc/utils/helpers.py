@@ -15,7 +15,7 @@ def mask_and_apply(x, mask, f):
     tranformed_selected = f(x.masked_select(mask))
     return x.masked_scatter(mask, tranformed_selected)
 
-
+# SHOULD USE partial from functools !
 def change_param(callable, **kwargs):
     def changed_callable(*args, **kwargs2):
         return callable(*args, **kwargs, **kwargs2)
@@ -95,33 +95,20 @@ def make_depth_sep_conv(Conv):
 
         kernel_size : int
 
-        is_confidence : bool, optional
-            Whetehr to normlaize the convolution by a confidence measure (should)
-            be in last channel of input.
-
         **kwargs :
             Additional arguments to `Conv`
         """
 
-        def __init__(self, in_channels, out_channels, kernel_size, is_confidence=False, **kwargs):
+        def __init__(self, in_channels, out_channels, kernel_size,
+                     confidence=False, bias=True, **kwargs):
             super().__init__()
             self.depthwise = Conv(in_channels, in_channels, kernel_size,
-                                  groups=in_channels, **kwargs)
-            self.pointwise = Conv(in_channels, out_channels, 1)
-            self.is_confidence = is_confidence
+                                  groups=in_channels, bias=bias, **kwargs)
+            self.pointwise = Conv(in_channels, out_channels, 1, bias=bias)
             self.reset_parameters()
 
         def forward(self, x):
-            if self.is_confidence:
-                confidence_channel = torch.sigmoid(x[..., -1:, :])
-                x = confidence_channel * x
-
             out = self.depthwise(x)
-
-            if self.is_confidence:
-                normalizer = self.depthwise(confidence_channel.expand(out.shape))
-                out = out / normalizer
-
             out = self.pointwise(out)
             return out
 

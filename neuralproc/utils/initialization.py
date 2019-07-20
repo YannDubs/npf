@@ -10,7 +10,15 @@ def weights_init(module, **kwargs):
     module : nn.Module
        module to initialize.
     """
+    module.is_resetted = True
     for m in module.modules():
+        try:
+            if hasattr(module, "reset_parameters") and module.is_resetted:
+                # don't reset if resetted already (might want special)
+                continue
+        except AttributeError:
+            pass
+
         if isinstance(m, torch.nn.modules.conv._ConvNd):
             # used in https://github.com/brain-research/realistic-ssl-evaluation/
             nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
