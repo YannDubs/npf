@@ -8,6 +8,8 @@ from neuralproc.utils.helpers import make_depth_sep_conv
 __all__ = ["CNN", "UnetCNN", "SparseUnetCNN", "SparseCNN"]
 
 # for confidence channel can try max pooling
+
+
 class ConvBlock(nn.Module):
     def __init__(self, in_chan, out_chan, Conv,
                  kernel_size=5,
@@ -417,12 +419,15 @@ class CNN(nn.Module):
 class UnetCNN(CNN):
     def __init__(self, n_channels, Conv, Pool, upsample_mode,
                  is_double_conv=False,
-                 bottleneck=None,  # latent or deterministic
+                 max_nchannels=512,
+                 bottleneck=None,
                  n_layers=5,
+                 is_force_same_bottleneck=False,
                  **kwargs):
 
         self.is_double_conv = is_double_conv
         self.bottleneck = bottleneck
+        self.max_nchannels = max_nchannels
         super().__init__(n_channels, Conv,
                          padding=-1,
                          dilation=1,
@@ -431,6 +436,7 @@ class UnetCNN(CNN):
         self.pooling_size = 4 if bottleneck is not None else 2
         self.pooling = Pool(self.pooling_size)
         self.upsample_mode = upsample_mode
+        self.is_force_same_bottleneck = is_force_same_bottleneck
 
     def apply_convs(self, X):
 
@@ -446,13 +452,18 @@ class UnetCNN(CNN):
 
         # Bottleneck
         X = self._apply_conv_block_i(X, n_down_blocks)
-        summary = X
+        summary = X.mean(-1)  # summary before forcing same bottleneck!
 
-        if self.bottleneck is not None:
+        if self.is_force_same_bottleneck and self.training:
             # if all the batches are from the same function then use the same
             # botlleneck for all to be sure that use the summary
-            # X = X.mean(0, keepdim=True).expand(*X.shape)
-            pass
+            # in this case the batch should bea concatenated same batch
+            # only force during training
+            batch_size = X.size(0)
+            batch_1 = X[:batch_size // 2, ...]
+            batch_2 = X[batch_size // 2:, ...]
+            X_mean = (batch_1 + batch_2) / 2
+            X = torch.cat([X_mean, X_mean], dim=0)
 
         # Up
         for i in range(n_down_blocks + 1, n_blocks):
@@ -477,7 +488,7 @@ class UnetCNN(CNN):
 
     def _get_in_out_channels(self, n_channels, n_layers):
         """Return a list of tuple of input and output channels for a Unet."""
-        factor_chan = 1 if self.bottleneck is not None else 2
+        factor_chan = 1 if self.bottleneck == "channels" else 2
 
         if self.is_double_conv:
             assert n_layers % 2 == 0, "n_layers={} not even".format(n_layers)
@@ -487,7 +498,8 @@ class UnetCNN(CNN):
             channel_list = [i for i in channel_list for _ in (0, 1)]
             # e.g.: [16, 16, 32, 32, 64, 64, 64, 32, 32, 16, 16]
             channel_list = channel_list + channel_list[-2::-1]
-            # e.g.: [16, 16, 32, 32, 64, 64, 64, 32, 32, 16, 16]
+            # bound max number of channels by self.max_nchannels
+            channel_list = [min(c, self.max_nchannels) for c in channel_list]
             # e.g.: [..., (32, 32), (32, 64), (64, 64), (64, 32), (32, 32), (32, 16) ...]
             in_out_channels = super()._get_in_out_channels(channel_list, n_layers)
             # e.g.: [..., (32, 32), (32, 64), (64, 64), (128, 32), (32, 32), (64, 16) ...]
@@ -501,6 +513,8 @@ class UnetCNN(CNN):
             channel_list = [factor_chan**i * n_channels for i in range(n_layers // 2 + 1)]
             # e.g.: [16, 32, 64, 64, 32, 16]
             channel_list = channel_list + channel_list[::-1]
+            # bound max number of channels by self.max_nchannels
+            channel_list = [min(c, self.max_nchannels) for c in channel_list]
             # e.g.: [(16, 32), (32,64), (64, 64), (64, 32), (32, 16)]
             in_out_channels = super()._get_in_out_channels(channel_list, n_layers)
             # e.g.: [(16, 32), (32,64), (64, 64), (128, 32), (64, 16)] due to concat

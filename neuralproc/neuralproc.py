@@ -1,4 +1,5 @@
 import math
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -8,8 +9,7 @@ from torch.distributions import Normal
 
 from neuralproc.predefined import MLP, CNN, UnetCNN
 from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import (min_max_scale, MultivariateNormalDiag,
-                                      change_param)
+from neuralproc.utils.helpers import min_max_scale, MultivariateNormalDiag
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
@@ -135,7 +135,8 @@ class NeuralProcess(nn.Module):
                  encoded_path="deterministic",
                  PredictiveDistribution=Normal,
                  is_summary=False,
-                 is_use_x=True):
+                 is_use_x=True,
+                 min_std=0.1):
         super().__init__()
 
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
@@ -145,6 +146,7 @@ class NeuralProcess(nn.Module):
                                                                         is_use_x,
                                                                         r_dim)
 
+        self.min_std = min_std
         self.is_summary = is_summary
         self.get_cntxt_trgt = get_cntxt_trgt
         self.x_dim = x_dim
@@ -182,8 +184,8 @@ class NeuralProcess(nn.Module):
 
     def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
         # don't use `x` to be translation equivariant
-        dflt_sub_decoder = change_param(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
-        dflt_sub_xyencoder = change_param(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
+        dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
+        dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
 
         if not is_use_x:
             if Decoder is None:
@@ -350,7 +352,7 @@ class NeuralProcess(nn.Module):
 
         loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
-        scale_trgt = 0.1 + 0.9 * F.softplus(scale_trgt)
+        scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
         p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
 
         return p_y
@@ -453,7 +455,7 @@ class GlobalNeuralProcess(NeuralProcess):
         Self attention mechanism to use for {tmp_query} -> {tmp_query}. Note
         that the temporary queries will be uniformly sampled and you can thus use
         a convolution instead. Example:
-            - `change_param(CNN, is_chan_last=True)` : uses a multilayer CNN. To
+            - `partial(CNN, is_chan_last=True)` : uses a multilayer CNN. To
             be compatible with self attention the channel layer should be last.
             - `SelfAttention` : uses a self attention layer.
 
@@ -480,18 +482,18 @@ class GlobalNeuralProcess(NeuralProcess):
     def __init__(self, x_dim, y_dim,
                  n_tmp_queries=256,
                  keys_to_tmp_attn=SetConv,
-                 TmpSelfAttn=change_param(UnetCNN,
-                                          Conv=nn.Conv1d,
-                                          Pool=torch.nn.MaxPool1d,
-                                          upsample_mode="linear",
-                                          n_layers=10,
-                                          is_double_conv=True,
-                                          bottleneck=None,
-                                          is_depth_separable=True,
-                                          Normalization=nn.Identity,
-                                          is_chan_last=True,
-                                          kernel_size=7),
-                 tmp_to_queries_attn=change_param(SetConv, RadialBasisFunc=GaussianRBF),
+                 TmpSelfAttn=partial(UnetCNN,
+                                     Conv=nn.Conv1d,
+                                     Pool=torch.nn.MaxPool1d,
+                                     upsample_mode="linear",
+                                     n_layers=10,
+                                     is_double_conv=True,
+                                     bottleneck=None,
+                                     is_depth_separable=True,
+                                     Normalization=nn.Identity,
+                                     is_chan_last=True,
+                                     kernel_size=7),
+                 tmp_to_queries_attn=partial(SetConv, RadialBasisFunc=GaussianRBF),
                  is_skip_tmp=False,
                  is_use_x=False,
                  get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=False),

@@ -1,5 +1,7 @@
 import logging
 
+import numpy as np
+
 from .helpers import NotLoadedError, load_chunk, save_chunk
 
 
@@ -15,8 +17,20 @@ def cntxt_trgt_precompute(get_xy, get_cntxt_trgt, save_file, idx_chunk=None, **k
         X_cntxt, Y_cntxt, X_trgt, Y_trgt = (loaded["X_cntxt"], loaded["Y_cntxt"],
                                             loaded["X_trgt"], loaded["Y_trgt"])
     except NotLoadedError:
-        X, y = get_xy()
+        try_step = 0
+        is_data = False
+
+        while not is_data:
+            try:
+                X, y = get_xy()
+                is_data = True
+            except np.linalg.LinAlgError:
+                try_step += 1
+                if try_step > 10:
+                    raise np.linalg.LinAlgError
+
         X_cntxt, Y_cntxt, X_trgt, Y_trgt = get_cntxt_trgt(X, y, **kwargs)
+
         save_chunk({"X_cntxt": X_cntxt, "Y_cntxt": Y_cntxt, "X_trgt": X_trgt, "Y_trgt": Y_trgt},
                    save_file, idx_chunk, logger=logger)
 

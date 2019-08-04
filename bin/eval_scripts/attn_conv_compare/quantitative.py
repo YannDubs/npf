@@ -35,10 +35,10 @@ X_DIM = 1  # 1D spatial input
 Y_DIM = 1  # 1D regression
 N_POINTS = 128
 N_SAMPLES = 100000  # this is a lot and can work with less
-N_DIFF_HYP = 1000
+N_DIFF_HYP = 32
 MAX_EPOCHS = 50
 datasets = get_gp_datasets_varying(n_samples=N_SAMPLES, n_points=N_POINTS,
-                                   n_diff_kernel_hyp=N_DIFF_HYP, save_file='data/gp_dataset.hdf5')
+                                   n_diff_kernel_hyp=N_DIFF_HYP, save_file='data/gp_dataset_test.hdf5')
 
 
 def load_run_k(run):
@@ -302,7 +302,7 @@ def load_run_k(run):
 
 
 def score_cnp(trainer, dataset, get_cntxt_trgt=None, save_file=None,
-              batch_size=256, n_test=100000, **kwargs):
+              batch_size=64, n_test=100000, **kwargs):
     """Return the log likelihood"""
     score = 0
     n_steps = 0
@@ -317,17 +317,19 @@ def score_cnp(trainer, dataset, get_cntxt_trgt=None, save_file=None,
     # use th eloss as metric (i.e. return log likelihood)
     trainer.criterion_.is_use_as_metric = True
 
-    # only get sample from data if not already precomputed
-    X_cntxt, Y_cntxt, X_trgt, Y_trgt = cntxt_trgt_precompute(lambda: dataset.get_samples(n_samples=n_test, **kwargs),
-                                                             get_cntxt_trgt, save_file)
-
     trainer.module_.get_cntxt_trgt = precomputed_cntxt_trgt_split
 
-    for i in range(0, n_test, batch_size):
+    for i in range(0, n_test // batch_size):
         n_steps += 1
-        Xi_cntxt, Yi_cntxt, Xi_trgt, Yi_trgt = X_cntxt[i:i + batch_size], Y_cntxt[i:i + batch_size], X_trgt[i:i + batch_size], Y_trgt[i:i + batch_size]
+
+        # only get sample from data if not already precomputed
+        (X_cntxt, Y_cntxt, X_trgt, Y_trgt
+         ) = cntxt_trgt_precompute(lambda: dataset.get_samples(n_samples=batch_size, **kwargs),
+                                   get_cntxt_trgt, save_file,
+                                   idx_chunk=i)
+
         # puts in a skorch format (because y is splitted in the module itself)
-        step = trainer.validation_step({"X": Xi_cntxt, "y": Yi_cntxt, "X_trgt": Xi_trgt, "y_trgt": Yi_trgt}, Yi_trgt)
+        step = trainer.validation_step({"X": X_cntxt, "y": Y_cntxt, "X_trgt": X_trgt, "y_trgt": Y_trgt}, Y_trgt)
         score += step["loss"].item()
 
     score /= n_steps
@@ -392,7 +394,8 @@ def score_cnp_dense(trainer, dataset, **kwargs):
 
     # increase density by 100 and decrease test number by 10 (if not time ++), also decrease batchsize
     # for memory reasons
-    score = score_cnp(trainer, dataset, n_points=dataset.n_points * 10, n_test=50000, batch_size=32, **kwargs)
+    score = score_cnp(trainer, dataset, n_points=dataset.n_points * 10,
+                      n_test=50000, batch_size=32, **kwargs)
 
     return score
 
@@ -417,17 +420,17 @@ def make_all_summaries(loaded, save_file=None):
             time_per_epochs = sum(h['dur'] for h in history) / len(history)
 
             test_log_likelihood_interp = score_cnp(trainer, dataset,
-                                                   save_file=("data/gp_dataset.hdf5", "{}/test_interp".format(data_name)))
+                                                   save_file=("data/gp_dataset_test.hdf5", "{}/test_interp".format(data_name)))
             test_log_likelihood_future = score_cnp_extrap(trainer, dataset, "future",
-                                                          save_file=("data/gp_dataset.hdf5", "{}/test_future".format(data_name)))
+                                                          save_file=("data/gp_dataset_test.hdf5", "{}/test_future".format(data_name)))
             test_log_likelihood_scale = score_cnp_extrap(trainer, dataset, "scale",
-                                                         save_file=("data/gp_dataset.hdf5", "{}/test_scale".format(data_name)))
+                                                         save_file=("data/gp_dataset_test.hdf5", "{}/test_scale".format(data_name)))
             test_log_likelihood_shift = score_cnp_extrap(trainer, dataset, "shift",
-                                                         save_file=("data/gp_dataset.hdf5", "{}/test_shift".format(data_name)))
+                                                         save_file=("data/gp_dataset_test.hdf5", "{}/test_shift".format(data_name)))
 
             try:
                 test_log_likelihood_dense = score_cnp_dense(trainer, dataset,
-                                                            save_file=("data/gp_dataset.hdf5", "{}/test_dense".format(data_name)))
+                                                            save_file=("data/gp_dataset_test.hdf5", "{}/test_dense".format(data_name)))
             except:
                 print("issue with dense for", data_name)
                 test_log_likelihood_dense = float("inf")
@@ -453,7 +456,8 @@ def make_all_summaries(loaded, save_file=None):
     return all_summaries
 
 
-def score_generator(dataset, get_cntxt_trgt=None, save_file=None, n_test=100000, **kwargs):
+def score_generator(dataset, get_cntxt_trgt=None, save_file=None, n_test=100000,
+                    batch_size=64, **kwargs):
     """Return the log likelihood"""
     score = 0
     score_clamped = 0
@@ -467,29 +471,34 @@ def score_generator(dataset, get_cntxt_trgt=None, save_file=None, n_test=100000,
         # when evealuating loss, use all targtes in that are not in context (but still sampel context)
         get_cntxt_trgt.set_eval()
 
-    # only get sample from data if not already precomputed
-    X_cntxt, Y_cntxt, X_trgt, Y_trgt = cntxt_trgt_precompute(lambda: dataset.get_samples(n_samples=n_test, **kwargs),
-                                                             get_cntxt_trgt, save_file)
+    n_runs = n_test  # // batch_size
 
-    # for generator should not be in -1 1
-    X_cntxt = rescale_range(X_cntxt, (-1, 1), dataset.min_max).numpy()
-    X_trgt = rescale_range(X_trgt, (-1, 1), dataset.min_max).numpy()
-    Y_cntxt = Y_cntxt.numpy()
-    Y_trgt = Y_trgt.double()  # double precison for loss and leave in pytorch
+    for i in range(n_runs):
+        # only get sample from data if not already precomputed
+        (X_cntxt, Y_cntxt, X_trgt, Y_trgt
+         ) = cntxt_trgt_precompute(lambda: dataset.get_samples(n_samples=batch_size, **kwargs),
+                                   get_cntxt_trgt, save_file,
+                                   idx_chunk=i)
 
-    for i in range(n_test):
-        Xi_cntxt, Yi_cntxt, Xi_trgt, Yi_trgt = X_cntxt[i], Y_cntxt[i], X_trgt[i], Y_trgt[i]
-        generator.fit(Xi_cntxt, Yi_cntxt)
-        mean_y, std_y = generator.predict(Xi_trgt, return_std=True)
-        # use exact same loss as for CNP (could use scipy.stats.multivariate_normal.logpdf) but results differef
-        m = MultivariateNormalDiag(torch.from_numpy(mean_y), torch.from_numpy(std_y))
-        m_clamped = MultivariateNormalDiag(torch.from_numpy(mean_y), torch.from_numpy(std_y).clamp(min=0.1))
-        score += m.log_prob(Yi_trgt).mean().item()
-        score_clamped += m_clamped.log_prob(Yi_trgt).mean().item()
-        break
+        # for generator should not be in -1 1
+        X_cntxt = rescale_range(X_cntxt, (-1, 1), dataset.min_max).numpy()
+        X_trgt = rescale_range(X_trgt, (-1, 1), dataset.min_max).numpy()
+        Y_cntxt = Y_cntxt.numpy()
+        Y_trgt = Y_trgt.double()  # double precison for loss and leave in pytorch
 
-    score /= n_test
-    score_clamped /= n_test
+        for j in range(1):  # just do 1 per batch if not would be way too long
+
+            Xi_cntxt, Yi_cntxt, Xi_trgt, Yi_trgt = X_cntxt[j], Y_cntxt[j], X_trgt[j], Y_trgt[j]
+            generator.fit(Xi_cntxt, Yi_cntxt)
+            mean_y, std_y = generator.predict(Xi_trgt, return_std=True)
+            # use exact same loss as for CNP (could use scipy.stats.multivariate_normal.logpdf) but results differef
+            m = MultivariateNormalDiag(torch.from_numpy(mean_y), torch.from_numpy(std_y))
+            m_clamped = MultivariateNormalDiag(torch.from_numpy(mean_y), torch.from_numpy(std_y).clamp(min=0.1))
+            score += m.log_prob(Yi_trgt).mean().item()
+            score_clamped += m_clamped.log_prob(Yi_trgt).mean().item()
+
+    score /= n_runs
+    score_clamped /= n_runs
 
     if get_cntxt_trgt is not None:
         get_cntxt_trgt.reset()  # reset in case used in future
@@ -502,11 +511,11 @@ def add_generator_results(all_summaries, datasets, save_file=None):
     all_summaries["Generator"] = dict()
 
     for k, dataset in datasets.items():
-        test_log_likelihood_interp = score_generator(dataset, save_file=("data/gp_dataset.hdf5", "{}/test_interp".format(k)))
-        test_log_likelihood_future = score_generator(dataset, save_file=("data/gp_dataset.hdf5", "{}/test_future".format(k)))
-        test_log_likelihood_scale = score_generator(dataset, save_file=("data/gp_dataset.hdf5", "{}/test_scale".format(k)))
-        test_log_likelihood_shift = score_generator(dataset, save_file=("data/gp_dataset.hdf5", "{}/test_shift".format(k)))
-        test_log_likelihood_dense = score_generator(dataset, save_file=("data/gp_dataset.hdf5", "{}/test_dense".format(k)))
+        test_log_likelihood_interp = score_generator(dataset, save_file=("data/gp_dataset_test.hdf5", "{}/test_interp".format(k)))
+        test_log_likelihood_future = score_generator(dataset, save_file=("data/gp_dataset_test.hdf5", "{}/test_future".format(k)))
+        test_log_likelihood_scale = score_generator(dataset, save_file=("data/gp_dataset_test.hdf5", "{}/test_scale".format(k)))
+        test_log_likelihood_shift = score_generator(dataset, save_file=("data/gp_dataset_test.hdf5", "{}/test_shift".format(k)))
+        test_log_likelihood_dense = score_generator(dataset, save_file=("data/gp_dataset_test.hdf5", "{}/test_dense".format(k)), batch_size=32)
 
         all_summaries["Generator"][k] = dict(
             test_log_likelihood_interp=test_log_likelihood_interp[0],
@@ -531,14 +540,21 @@ def add_generator_results(all_summaries, datasets, save_file=None):
 
 
 def summarise_run_k(run, basename="results/attn_conv_compare/summaries"):
+    """
     loaded = load_run_k(run)
     print("MAKING SUMMARIES")
+
     all_summaries = make_all_summaries(loaded,
                                        save_file="{}_run_k{}.json".format(basename, k))
-    all_summaries = add_generator_results(all_summaries, datasets,
+
+    """
+    all_summaries = add_generator_results({}, datasets,
                                           save_file="{}_run_k{}_with_gen.json".format(basename, k))
 
 
 if __name__ == "__main__":
     for k in range(3):
-        summarise_run_k(k)
+        if k in [0, 2]:
+            continue
+        # already have the others
+        summarise_run_k(-1)

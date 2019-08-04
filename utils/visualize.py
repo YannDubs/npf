@@ -13,17 +13,21 @@ DFLT_FIGSIZE = (11, 5)
 
 
 def plot_dataset_samples(dataset, n_samples=50, title="Dataset",
-                         figsize=DFLT_FIGSIZE):
+                         figsize=DFLT_FIGSIZE, ax=None):
     """Plot `n_samples` samples of the a datset."""
-    plt.figure(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+
     alpha = 1 / (n_samples + 1)**0.5
 
     for i in range(n_samples):
         x, y = dataset[i]
         x = rescale_range(x, (-1, 1), dataset.min_max)
-        plt.plot(x.numpy(), y.numpy(), c='b', alpha=alpha)
-        plt.xlim(*dataset.min_max)
-    plt.title(title, fontsize=14)
+        ax.plot(x.numpy(), y.numpy(), c='b', alpha=alpha)
+        ax.set_xlim(*dataset.min_max)
+
+    if title is not None:
+        ax.set_title(title, fontsize=14)
 
 
 def _rescale_ylim(y_min, y_max):
@@ -111,8 +115,8 @@ def plot_posterior_predefined_cntxt(model,
     for i in range(n_samples):
         p_y_pred = _get_p_y_pred(model, X_cntxt, Y_cntxt, X_target)
 
-        mean_y = p_y_pred.base_dist.loc.detach().numpy()[0].flatten()
-        std_y = p_y_pred.base_dist.scale.detach().numpy()[0].flatten()
+        mean_y = p_y_pred.base_dist.loc.detach().numpy()[0, :, 0].flatten()
+        std_y = p_y_pred.base_dist.scale.detach().numpy()[0, :, 0].flatten()
 
         if i == 0:
             ax.plot(X_trgt_plot, mean_y, alpha=alpha, c=mean_color,
@@ -133,14 +137,14 @@ def plot_posterior_predefined_cntxt(model,
 
     if true_func is not None and not is_comparing:
         X_true = true_func[0].numpy()[0].flatten()
-        Y_true = true_func[1].numpy()[0].flatten()
+        Y_true = true_func[1].numpy()[0, :, 0].flatten()
         X_true = rescale_range(X_true, (-1, 1), train_min_max)
         ax.plot(X_true, Y_true, "--k", alpha=0.7, label='Sampled target function')
         y_min = min(y_min, Y_true.min())
         y_max = max(y_max, Y_true.max())
 
     if is_conditioned:
-        ax.scatter(X_cntxt_plot, Y_cntxt[0].numpy(), c='k')
+        ax.scatter(X_cntxt_plot, Y_cntxt[0, :, 0].numpy(), c='k')
 
     # extrapolation might give huge values => rescale to have y lim as interpolation
     ax.set_ylim(_rescale_ylim(y_min, y_max))
