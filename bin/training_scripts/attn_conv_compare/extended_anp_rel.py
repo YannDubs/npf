@@ -2,6 +2,7 @@
 Script to run the "small extended GNP" experiments on 1D dataset.
 """
 from argparse import ArgumentParser
+from functools import partial
 
 import os
 from os.path import dirname, abspath
@@ -17,9 +18,10 @@ import torch
 N_THREADS = 8
 torch.set_num_threads(N_THREADS)
 
-from neuralproc import AttentiveNeuralProcess
+from neuralproc import AttentiveNeuralProcess, discard_ith_arg
 from neuralproc.utils.helpers import change_param
 from neuralproc.utils.datasplit import CntxtTrgtGetter, GetRandomIndcs
+from neuralproc.predefined import MLP
 
 from ntbks_helpers import (get_gp_datasets, get_gp_datasets_varying,
                            train_all_models_, CNP_KWARGS)
@@ -49,7 +51,8 @@ ANP_KWARGS = dict(get_cntxt_trgt=get_cntxt_trgt,
                   r_dim=32,
                   encoded_path="deterministic",  # use CNP
                   attention="transformer",
-                  is_relative_pos=True)
+                  is_translation_equiv=True,
+                  )
 
 # initialize one model for each dataset
 data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
@@ -57,6 +60,6 @@ data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
 
 ### Training ###
 info = train_all_models_(data_models,
-                         "results/attn_conv_compare/data_1D/run_k{}/extended_anp_rel".format(args.run),
+                         "results/attn_conv_compare/data_1D/run_k{}/extended_anp_tequiv".format(args.run),
                          is_retrain=True,
                          is_progress_bar=False)  # if false load precomputed

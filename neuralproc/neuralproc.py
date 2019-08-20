@@ -305,6 +305,7 @@ class NeuralProcess(nn.Module):
         Deterministic encoding path. `X_trgt` can be used in child classes
         to give a target specific representation (e.g. attentive neural processes).
         """
+
         # size = [batch_size, n_cntxt, x_transf_dim]
         X_transf = self.x_encoder(X_cntxt)
         # size = [batch_size, n_cntxt, x_transf_dim]
@@ -398,7 +399,18 @@ class AttentiveNeuralProcess(NeuralProcess):
                  attention="scaledot",
                  encoded_path="both",
                  is_relative_pos=False,
+                 is_translation_equiv=False,
                  **kwargs):
+
+        self.is_translation_equiv = is_translation_equiv
+        if self.is_translation_equiv:
+            dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
+            dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
+            XYEncoder = discard_ith_arg(dflt_sub_xyencoder, i=0)  # depend only on y not x
+            Decoder = discard_ith_arg(dflt_sub_decoder, i=0)
+            kwargs["Decoder"] = Decoder
+            kwargs["XYEncoder"] = XYEncoder
+            is_relative_pos = True
 
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
@@ -414,6 +426,7 @@ class AttentiveNeuralProcess(NeuralProcess):
         """
         Deterministic encoding path.
         """
+
         # size = [batch_size, n_cntxt, x_transf_dim]
         keys = self.x_encoder(X_cntxt)
 
@@ -424,6 +437,9 @@ class AttentiveNeuralProcess(NeuralProcess):
         queries = self.x_encoder(X_trgt)
 
         rel_pos_enc = self.rel_pos_encoder(X_cntxt, X_trgt) if self.is_relative_pos else None
+
+        if self.is_translation_equiv:
+            keys, queries = keys * 0 + 1, queries * 0 + 1
 
         # size = [batch_size, n_trgt, value_size]
         R_attn = self.attender(keys, queries, values, rel_pos_enc=rel_pos_enc)

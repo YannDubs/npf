@@ -69,7 +69,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_gnp_unet"
 
@@ -100,7 +100,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_gnp_simple_only_mlp"
 
@@ -129,7 +129,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_gnp_simple_only_normalize"
 
@@ -160,7 +160,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_gnp_simple_only_depthsep"
 
@@ -189,7 +189,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_anp_sin"
 
@@ -208,7 +208,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "extended_anp_rel"
 
@@ -217,6 +217,25 @@ def load_run_k(run):
                       encoded_path="deterministic",  # use CNP
                       attention="transformer",
                       is_relative_pos=True)
+
+    # initialize one model for each dataset
+    data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
+                   for name, data in datasets.items()}
+
+    trainers = train_all_models_(data_models,
+                                 "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
+                                 is_retrain=False)  # if false load precomputed
+
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+
+    model_name = "extended_anp_tequiv"
+
+    ANP_KWARGS = dict(get_cntxt_trgt=get_cntxt_trgt,
+                      r_dim=32,
+                      encoded_path="deterministic",  # use CNP
+                      attention="transformer",
+                      is_translation_equiv=True,
+                      )
 
     # initialize one model for each dataset
     data_models = {name: (AttentiveNeuralProcess(X_DIM, Y_DIM, **ANP_KWARGS), data)
@@ -249,7 +268,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "vanilla_anp"
 
@@ -267,7 +286,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     model_name = "vanilla_gnp"
 
@@ -296,7 +315,7 @@ def load_run_k(run):
                                  "results/attn_conv_compare/data_1D/run_k{}/{}".format(run, model_name),
                                  is_retrain=False)  # if false load precomputed
 
-    loaded[model_name] = dict(data_models=data_models, trainers=trainers)
+    #loaded[model_name] = dict(data_models=data_models, trainers=trainers)
 
     return loaded
 
@@ -540,7 +559,7 @@ def add_generator_results(all_summaries, datasets, save_file=None):
 
 
 def summarise_run_k(run, basename="results/attn_conv_compare/summaries"):
-    """
+
     loaded = load_run_k(run)
     print("MAKING SUMMARIES")
 
@@ -550,11 +569,9 @@ def summarise_run_k(run, basename="results/attn_conv_compare/summaries"):
     """
     all_summaries = add_generator_results({}, datasets,
                                           save_file="{}_run_k{}_with_gen.json".format(basename, k))
+    """
 
 
 if __name__ == "__main__":
     for k in range(3):
-        if k in [0, 2]:
-            continue
-        # already have the others
-        summarise_run_k(-1)
+        summarise_run_k(k)
