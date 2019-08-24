@@ -28,20 +28,21 @@ class SelfAttention(nn.Module):
     positional : {"absolute", "relative", None}, optional
         Type of positional encodings. `"absolute"` adds positional encodings
         (sinusoidals) to the input before self attention (Transformer). `"relative"`
-        uses relative encodings at every attention layer (Transformer XL). `position_dim`
-        has to be given when not `None`.
+        uses relative encodings at every attention layer (Transformer XL).
+        `position_dim` has to be given when not `None`.
 
     position_dim : int, optional
-        DImenion of the position.
+        Dimenion of the position.
 
     max_len : int, optional
-        Maximum number of x. Only used if `is_positional`.
+        Maximum number of x. Only used if `positional is not None`.
 
     kwargs :
         Additional arguments to `get_attender`.
     """
 
-    def __init__(self, x_dim, out_dim=None,
+    def __init__(self, x_dim,
+                 out_dim=None,
                  n_attn_layers=2,
                  attention="transformer",
                  positional=None,
@@ -55,13 +56,13 @@ class SelfAttention(nn.Module):
             self.pos_encoder = SinusoidalEncodings(position_dim, x_dim)
         elif self.positional == "relative":
             self.rel_pos_encoder = RelativeSinusoidalEncodings(position_dim, x_dim)
+            kwargs["is_relative_pos"] = True
         elif self.positional is None:
-            is_relative_pos = False
+            pass
         else:
             raise ValueError("Unknown positional={}.".format(positional))
 
         self.attn_layers = nn.ModuleList([get_attender(attention, x_dim, x_dim, x_dim,
-                                                       is_relative_pos=is_relative_pos,
                                                        **kwargs)
                                           for _ in range(n_attn_layers)])
 
@@ -75,19 +76,17 @@ class SelfAttention(nn.Module):
         weights_init(self)
 
     def forward(self, X, positions=None):
+        add_to_keys = 0
         if self.positional == "absolute":
             X = X + self.pos_encoder(positions)
+        elif self.positional == "relative":
+            # n^2 for now but could be n(n+1)/2 if sorted
+            add_to_keys = self.rel_pos_encoder(positions, positions)
 
         out = X
+
         for attn_layer in self.attn_layers:
-
-            if self.positional == "relative":
-                # n^2 for now but could be n(n+1)/2
-                keys = out + self.rel_pos_encoder(positions, positions)
-            else:
-                keys = out
-
-            out = attn_layer(keys, out, out)
+            out = attn_layer(out + add_to_keys, out, out)
 
         if self.is_resize:
             out = self.resize(out)

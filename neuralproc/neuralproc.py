@@ -7,9 +7,11 @@ import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
-from neuralproc.predefined import MLP, CNN, UnetCNN
+from neuralproc.predefined import MLP, CNN, UnetCNN, ResConvBlock
 from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import min_max_scale, MultivariateNormalDiag
+from neuralproc.utils.helpers import (MultivariateNormalDiag, ProbabilityConverter,
+                                      make_abs_conv, channels_to_2nd_dim,
+                                      channel_to_last_dim)
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
@@ -17,7 +19,7 @@ from neuralproc.utils.setcnn import SetConv, GaussianRBF
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 
 
-__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "GlobalNeuralProcess"]
+__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "UnifyingNeuralProcess"]
 
 
 class NeuralProcess(nn.Module):
@@ -41,14 +43,15 @@ class NeuralProcess(nn.Module):
 
     XEncoder : nn.Module, optional
         Spatial encoder module which maps {x_i} -> x_transf_i. It should be
-        constructable via `xencoder(x_dim, x_transf_dim)`. Example:
+        constructable via `XEncoder(x_dim, x_transf_dim)`. `None` uses
+        parameter dependent default. Example:
             - `MLP` : will learn positional embeddings with MLP
             - `SinusoidalEncodings` : use sinusoidal positional encodings.
 
     XYEncoder : nn.Module, optional
         Encoder module which maps {x_transf_i, y_i} -> {r_i}. It should be constructable
-        via `xyencoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
-        xy -> r you can convert it via `merge_flat_input(Encoder)`. `None` uses
+        via `XYEncoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
+        [x;y] -> r you can convert it via `merge_flat_input(Encoder)`. `None` uses
         parameter dependent default. Example:
             - `merge_flat_input(MLP, is_sum_merge=False)` : learn representation
             with MLP. `merge_flat_input` concatenates (or sums) X and Y inputs.
@@ -60,7 +63,7 @@ class NeuralProcess(nn.Module):
     Decoder : nn.Module, optional
         Decoder module which maps {x_t, r} -> {y_hat_t}. It should be constructable
         via `decoder(x, r_dim, n_out)`. If you have an decoder that maps
-        rx -> y you can convert it via `merge_flat_input(Decoder)`. `None` uses
+        [r;x] -> y you can convert it via `merge_flat_input(Decoder)`. `None` uses
         parameter dependent default. Example:
             - `merge_flat_input(MLP)` : predict with MLP.
             - `merge_flat_input(SelfAttention, is_sum_merge=True)` : predict
@@ -71,7 +74,7 @@ class NeuralProcess(nn.Module):
 
     aggregator : callable, optional
         Agregreator function which maps {r_i} -> r. It should have a an argument
-        `dim` to say specify the dimensions of aggregation. The dimension should
+        `dim` specify the dimensions of aggregation. The dimension should
         not be kept (i.e. keepdim=False). To use a cross attention aggregation,
         use `AttentiveNeuralProcess` instead of `NeuralProcess`.
 
@@ -79,13 +82,6 @@ class NeuralProcess(nn.Module):
         Encoder which maps r -> z_suff_stat. It should be constructed via
         `LatentEncoder(r_dim, n_out)`. Only used if `encoded_path in ["latent",
         "both"]`.
-
-    get_cntxt_trgt : callable, optional
-        Function that split the input into context and target points.
-        `X_cntxt, Y_cntxt, X_trgt, Y_trgt = self.get_cntxt_trgt(X, y, **kwargs)`.
-        Note: context points should be a subset of target ones. If you already
-        have the context and target point, put them in a dictionary and split
-        the dictionary in `get_cntxt_trgt`.
 
     encoded_path : {"deterministic", "latent", "both"}
         Which path(s) to use:
@@ -95,19 +91,26 @@ class NeuralProcess(nn.Module):
         - `"latent"` uses the original Neural Process [1], where the decoder gets
         a sample latent representation as input (function of the target during
         training and context during test).
-        If `"both"` concatenates both representations as described in [4].
+        - `"both"` concatenates both representations as described in [4].
 
     PredictiveDistribution : torch.distributions.Distribution, optional
         Predictive distribution. The predicted outputs will be independent and thus
         wrapped around `Independent` (e.g. diagonal covariance for a Gaussian).
         The input to the constructor are currently a value in ]-inf, inf[ and one
-        in [0.1, inf[ (typically `loc` and `scale`), although it is very easy to make
-        more general if needs be.
+        in [min_std, inf[ (typically `loc` and `scale`).
 
     is_use_x : bool, optional
         Whether to encode and use X in the representation (r_i) and when decoding.
         If `False`, then guarantees translation equivariance (if add some
         representation of the positional differences) or invariance.
+
+    pred_loc_transformer : callable, optional
+        Transformation to apply to the predicted location (e.g. mean for Gaussian)
+        of Y_trgt.
+
+    pred_scale_transformer : callable, optional
+        Transformation to apply to the predicted scale (e.g. std for Gaussian) of
+        Y_trgt. The default follows [3] by using a minimum of 0.1.
 
     References
     ----------
@@ -126,17 +129,17 @@ class NeuralProcess(nn.Module):
     def __init__(self, x_dim, y_dim,
                  r_dim=128,
                  x_transf_dim=-1,
-                 XEncoder=MLP,
+                 XEncoder=None,
                  XYEncoder=None,
                  Decoder=None,
                  aggregator=torch.mean,
                  LatentEncoder=MLP,
-                 get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=True),
                  encoded_path="deterministic",
                  PredictiveDistribution=Normal,
-                 is_summary=False,
                  is_use_x=True,
-                 min_std=0.1):
+                 pred_loc_transformer=nn.Identity(),
+                 pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt)
+                 ):
         super().__init__()
 
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
@@ -147,13 +150,13 @@ class NeuralProcess(nn.Module):
                                                                         r_dim)
 
         self.min_std = min_std
-        self.is_summary = is_summary
-        self.get_cntxt_trgt = get_cntxt_trgt
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.r_dim = r_dim
         self.encoded_path = encoded_path.lower()
         self.PredictiveDistribution = PredictiveDistribution
+        self.pred_loc_transformer = pred_loc_transformer
+        self.pred_scale_transformer = pred_scale_transformer
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -183,10 +186,10 @@ class NeuralProcess(nn.Module):
         weights_init(self)
 
     def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
-        # don't use `x` to be translation equivariant
         dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
         dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
 
+        # don't use `x` to be translation equivariant
         if not is_use_x:
             if Decoder is None:
                 Decoder = discard_ith_arg(dflt_sub_decoder, i=0)  # depend only on r not x
@@ -194,34 +197,21 @@ class NeuralProcess(nn.Module):
             if XYEncoder is None:
                 XYEncoder = discard_ith_arg(dflt_sub_xyencoder, i=0)  # depend only on y not x
 
-            x_transf_dim = None  # don't encode X
-            XEncoder = nn.Identity  # don't encode X
+            if XEncoder is None:
+                # don't encode X if not using it
+                x_transf_dim = None
+                XEncoder = nn.Identity
         else:
             if Decoder is None:
                 Decoder = merge_flat_input(dflt_sub_decoder, is_sum_merge=True)
             if XYEncoder is None:
                 XYEncoder = merge_flat_input(dflt_sub_xyencoder, is_sum_merge=True)
+            if XEncoder is None:
+                XEncoder = MLP
 
         return Decoder, XYEncoder, x_transf_dim, XEncoder
 
-    def forward(self, X, y=None, **kwargs):
-        """
-        Split context and target in the class to make it compatible with
-        usual datasets and training frameworks, then redirects to `forward_step`.
-        """
-        if self.is_summary:
-            X = X[0:1, ...].repeat(*[s if i == 0 else 1 for i, s in enumerate(X.shape)])
-            y = y[0:1, ...].repeat(*[s if i == 0 else 1 for i, s in enumerate(y.shape)])
-        X_cntxt, Y_cntxt, X_trgt, Y_trgt = self.get_cntxt_trgt(X, y, **kwargs)
-
-        # fro now onwards, all inputs are assumed to be in [-1,1] when training
-        if self.training:
-            if X_cntxt.max() > 1 or X_cntxt.min() < -1 or X_trgt.max() > 1 and X_trgt.min() < -1:
-                raise ValueError("Position inputs during training should be in [-1,1]. {} < X_cntxt < {} ; {} < X_trgt < {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
-
-        return self.forward_step(X_cntxt, Y_cntxt, X_trgt, Y_trgt=Y_trgt)
-
-    def forward_step(self, X_cntxt, Y_cntxt, X_trgt, Y_trgt=None):
+    def forward(self, X_cntxt, Y_cntxt, X_trgt, Y_trgt=None):
         """
         Given a set of context pairs {x_i, y_i} and target points {x_t}, return
         a set of posterior distribution over target points {y_trgt}.
@@ -235,20 +225,16 @@ class NeuralProcess(nn.Module):
             Set of all context values {y_i}.
 
         X_trgt: torch.Tensor, size=[batch_size, n_trgt, x_dim]
-            Set of all target features {x_t}. Note: context points should be a
-            subset of target ones.
+            Set of all target features {x_t}.
 
         Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim], optional
-            Set of all target values {y_t}. Only required during training.
+            Set of all target values {y_t}. Only required during training and if
+            using latent path.
 
         Return
         ------
         p_y_trgt: torch.distributions.Distribution
             Target distribution.
-
-        Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
-            Set of all target values {y_t}, returned to redirect it to the loss
-            function.
 
         q_z_trgt: torch.distributions.Distribution
             Latent distribution for the targets. `None` if `LatentEncoder=None`
@@ -258,6 +244,10 @@ class NeuralProcess(nn.Module):
             Latent distribution for the context points. `None` if
             `LatentEncoder=None` or not training.
         """
+        # input assumed to be in [-1,1] during training
+        if self.training:
+            if X_cntxt.max() > 1 or X_cntxt.min() < -1 or X_trgt.max() > 1 and X_trgt.min() < -1:
+                raise ValueError("Position inputs during training should be in [-1,1]. {} < X_cntxt < {} ; {} < X_trgt < {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
 
         R_det, z_sample, q_z_cntxt, q_z_trgt = None, None, None, None
 
@@ -272,12 +262,12 @@ class NeuralProcess(nn.Module):
                 z_sample, q_z_trgt = self.latent_path(X_trgt, Y_trgt)
 
         if self.encoded_path in ["deterministic", "both"]:
-            R_det, summary = self.deterministic_path(X_cntxt, Y_cntxt, X_trgt)
+            R_det = self.deterministic_path(X_cntxt, Y_cntxt, X_trgt)
 
         dec_inp = self.make_dec_inp(R_det, z_sample, X_trgt)
         p_y_trgt = self.decode(dec_inp, X_trgt)
 
-        return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary
+        return p_y_trgt, q_z_trgt, q_z_cntxt
 
     def latent_path(self, X, Y):
         """Latent encoding path."""
@@ -316,7 +306,7 @@ class NeuralProcess(nn.Module):
 
         batch_size, n_trgt, _ = X_trgt.shape
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
-        return R, None
+        return R
 
     def make_dec_inp(self, R, z_sample, X_trgt):
         """Make the context input for the decoder."""
@@ -343,6 +333,9 @@ class NeuralProcess(nn.Module):
         dec_inp : torch.Tensor, size=[batch_size, n_trgt, inp_dim]
             Input to the decoder. `inp_dim` is `r_dim * 2 + x_dim` if
             `encoded_path == "both"` else `r_dim + x_dim`.
+
+        X_trgt: torch.Tensor, size=[batch_size, n_trgt, x_dim]
+            Set of all target features {x_t}.
         """
 
         # size = [batch_size, n_trgt, x_transf_dim]
@@ -352,20 +345,26 @@ class NeuralProcess(nn.Module):
         suff_stat_Y_trgt = self.decoder(X_transf, dec_inp)
 
         loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
-        # Following convention "Empirical Evaluation of Neural Process Objectives"
-        scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
+
+        loc_trgt = self.pred_loc_transformer(loc_trgt)
+        scale_trgt = self.pred_scale_transformer(scale_trgt)
+
         p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
 
         return p_y
 
     def set_extrapolation(self, min_max):
-        """Set the neural process for extrapolation. Useful for  child classes."""
+        """Set the neural process for extrapolation. Useful for child classes."""
         pass
+
+    def preprocess_inputs(self, X_cntxt, Y_cntxt, X_trgt, Y_trgt):
+        """Preprocesses the inputs. Useful for child classes."""
+        return X_cntxt, Y_cntxt, X_trgt, Y_trgt
 
 
 class AttentiveNeuralProcess(NeuralProcess):
     """
-    Wrapper around `NeuralProcess` that implements an attentive neural process [4].
+    Wrapper around `NeuralProcess` that implements an attentive neural process [1].
 
     Parameters
     ----------
@@ -378,79 +377,76 @@ class AttentiveNeuralProcess(NeuralProcess):
     attention : callable or str, optional
         Type of attention to use. More details in `get_attender`.
 
-    is_relative_pos : bool, optional
-        Whether to add some relative position encodings. If `True` the positional
-        encoding of size `kq_size` should be given in the `forward pass`. Only possible
-        if `attention` takes `is_relative_pos` as argument
-        (`{"multihead", "transformer"}`). Note that still not equivarian because
-        use the position for the key and query.
+    is_translation_equiv : bool, optional
+        Whether to make the attentive neural process translation equivariant.
 
+    attention_kwargs : dict, optional
+        Additional arguments to `get_attender`.
 
     kwargs :
         Additional arguments to `NeuralProcess`.
 
     References
     ----------
-    [4] Kim, Hyunjik, et al. "Attentive neural processes." arXiv preprint
+    [1] Kim, Hyunjik, et al. "Attentive neural processes." arXiv preprint
         arXiv:1901.05761 (2019).
     """
 
     def __init__(self, x_dim, y_dim,
                  attention="scaledot",
-                 encoded_path="both",
-                 is_relative_pos=False,
                  is_translation_equiv=False,
+                 encoded_path="both",
+                 attention_kwargs={},
                  **kwargs):
 
         self.is_translation_equiv = is_translation_equiv
         if self.is_translation_equiv:
-            dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
-            dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
-            XYEncoder = discard_ith_arg(dflt_sub_xyencoder, i=0)  # depend only on y not x
-            Decoder = discard_ith_arg(dflt_sub_decoder, i=0)
-            kwargs["Decoder"] = Decoder
-            kwargs["XYEncoder"] = XYEncoder
-            is_relative_pos = True
+            attention_kwargs["is_relative_pos"] = True
+            kwargs["is_use_x"] = False
+            # transform even though not using => the input will be of the correct size
+            kwargs["XEncoder"] = nn.Linear
 
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
         self.attender = get_attender(attention, self.x_transf_dim, self.r_dim,
-                                     self.r_dim, is_relative_pos=is_relative_pos)
-        self.is_relative_pos = is_relative_pos
-        if self.is_relative_pos:
+                                     self.r_dim, **attention_kwargs)
+
+        if self.is_translation_equiv:
             self.rel_pos_encoder = RelativeSinusoidalEncodings(x_dim, self.r_dim)
 
         self.reset_parameters()
 
     def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
-        """
-        Deterministic encoding path.
-        """
 
         # size = [batch_size, n_cntxt, x_transf_dim]
         keys = self.x_encoder(X_cntxt)
 
-        # size = [batch_size, n_cntxt, r_dim]
-        values = self.xy_encoder(keys, Y_cntxt)
-
         # size = [batch_size, n_trgt, r_dim]
         queries = self.x_encoder(X_trgt)
 
-        rel_pos_enc = self.rel_pos_encoder(X_cntxt, X_trgt) if self.is_relative_pos else None
-
         if self.is_translation_equiv:
-            keys, queries = keys * 0 + 1, queries * 0 + 1
+            # dirty trick such that keys and queries do not have positioning
+            # information but are the correct size.
+            keys, queries = keys * 0., queries * 0.
+
+            # size = [batch_size, n_queries, n_keys, kq_size]
+            attender_kwargs = dict(rel_pos_enc=self.rel_pos_encoder(X_cntxt, X_trgt))
+        else:
+            attender_kwargs = {}
+
+        # size = [batch_size, n_cntxt, r_dim]
+        values = self.xy_encoder(keys, Y_cntxt)
 
         # size = [batch_size, n_trgt, value_size]
-        R_attn = self.attender(keys, queries, values, rel_pos_enc=rel_pos_enc)
+        R_attn = self.attender(keys, queries, values, **attender_kwargs)
 
-        return R_attn, None
+        return R_attn
 
 
-class GlobalNeuralProcess(NeuralProcess):
+class ConvolutionalProcess(NeuralProcess):
     """
-    Wrapper around `NeuralProcess` that implements a global neural process.
-    I.e. with temporary queries to represent the functional space.
+    Convolutional Process [Jonathan]. I.e. with temporary queries to represent the
+    functional space.
 
     Parameters
     ----------
@@ -460,28 +456,29 @@ class GlobalNeuralProcess(NeuralProcess):
     y_dim : int
         Dimension of y values.
 
-    n_tmp_queries : int, optional
-        Number of temporary queries to use.
+    n_pseudo : int, optional
+        Number of pseudo-inputs (temporary queries) to use. The pseudo-inputs
+        will be regularaly sampled.
 
-    keys_to_tmp_attn : callable or str, optional
-        Type of attention to use for {key} -> {tmp_query}. More details in
-        `get_attender`.
+    inp_to_pseudoinp : callable or str, optional
+        Callable or name of attention to use for {inp} -> {pseudo_inp}.
+        More details in `get_attender`. Example:
+            - `SetConv` : uses a set convolution as in the paper.
+            - `"transformer"` : uses a cross attention layer as in the transformer.
 
-    TmpSelfAttn : callable, optional
-        Self attention mechanism to use for {tmp_query} -> {tmp_query}. Note
+    PseudoTransformer : callable, optional
+        Object used to transform the pseudo inputs {pseudo_inp} -> {pseudo_inp}. Note
         that the temporary queries will be uniformly sampled and you can thus use
         a convolution instead. Example:
             - `partial(CNN, is_chan_last=True)` : uses a multilayer CNN. To
             be compatible with self attention the channel layer should be last.
             - `SelfAttention` : uses a self attention layer.
 
-    keys_to_tmp_attn : callable or str, optional
-        Type of attention to use. More details in `get_attender`.
-
-    is_skip_tmp:
-        Whether to have a residual connection that directly computes a mapping
-        between keys and queries without temporary values (i.e. using
-        classical cross attention). This will probably help optimisation.
+    pseudoinp_to_out : callable or str, optional
+        Callable or name of attention to use for {pseudo_inp} -> {r_trgt}.
+        More details in `get_attender`. Example:
+            - `SetConv` : uses a set convolution as in the paper.
+            - `"transformer"` : uses a cross attention layer as in the transformer.
 
     is_use_x : bool, optional
         Whether to encode and use X in the representation (r_i) and when decoding.
@@ -493,122 +490,201 @@ class GlobalNeuralProcess(NeuralProcess):
 
     kwargs :
         Additional arguments to `NeuralProcess`.
+
+    References
+    ----------
+    [Jonathan]
     """
 
     def __init__(self, x_dim, y_dim,
-                 n_tmp_queries=256,
-                 keys_to_tmp_attn=SetConv,
-                 TmpSelfAttn=partial(UnetCNN,
-                                     Conv=nn.Conv1d,
-                                     Pool=torch.nn.MaxPool1d,
-                                     upsample_mode="linear",
-                                     n_layers=10,
-                                     is_double_conv=True,
-                                     bottleneck=None,
-                                     is_depth_separable=True,
-                                     Normalization=nn.Identity,
-                                     is_chan_last=True,
-                                     kernel_size=7),
-                 tmp_to_queries_attn=partial(SetConv, RadialBasisFunc=GaussianRBF),
-                 is_skip_tmp=False,
-                 is_use_x=False,
-                 get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=False),
-                 is_encode_xy=False,
+                 n_pseudo=256,
+                 keys_to_pseudo=SetConv,
+                 PseudoSelfAttn=partial(CNN, ResConvBlock,
+                                        Conv=nn.Conv1d,
+                                        n_blocks=3,
+                                        Normalization=nn.Identity,
+                                        is_chan_last=True,
+                                        kernel_size=11),
+                 pseudo_to_queries=SetConv,
                  **kwargs):
 
-        self.is_skip_tmp = is_skip_tmp
         super().__init__(x_dim, y_dim,
                          encoded_path="deterministic",
-                         get_cntxt_trgt=get_cntxt_trgt,
-                         is_use_x=is_use_x,
+                         is_use_x=False,
+                         XYEncoder=nn.Identity,
                          **kwargs)
-        self.is_encode_xy = is_encode_xy
-        if not self.is_encode_xy:
-            self.xy_encoder = None
-            value_size = y_dim
-        else:
-            value_size = self.r_dim
 
-        self.n_tmp_queries = n_tmp_queries
-        self.tmp_queries = torch.linspace(-1, 1, self.n_tmp_queries)
-        self.keys_to_tmp_attender = get_attender(keys_to_tmp_attn, self.x_transf_dim,
-                                                 value_size, self.r_dim)
-        if TmpSelfAttn is not None:
-            self.tmp_self_attn = TmpSelfAttn(self.r_dim)
-            self.tmp_to_queries_attn = get_attender(tmp_to_queries_attn, self.x_transf_dim,
-                                                    self.r_dim, self.r_dim)
-        else:
-            self.tmp_self_attn = None
-
+        self.n_pseudo = n_pseudo
+        self.pseudo_keys = torch.linspace(-1, 1, self.n_pseudo)
+        self.keys_to_pseudo = get_attender(keys_to_pseudo, self.x_dim,
+                                           self.y_dim, self.r_dim)
+        self.pseudo_self_attn = PseudoSelfAttn(self.r_dim)
+        self.pseudo_to_queries = get_attender(pseudo_to_queries, self.x_dim,
+                                              self.r_dim, self.r_dim)
         self.reset_parameters()
 
     def reset_parameters(self):
         super().reset_parameters()
-        if self.is_skip_tmp:
-            self.gate = torch.nn.Parameter(torch.tensor([0.] * self.r_dim))
-            init_param_(self.gate)
 
     def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
         """
         Deterministic encoding path.
         """
         # effectively puts on cuda only once
-        self.tmp_queries = self.tmp_queries.to(X_cntxt.device)
-        tmp_queries = self.tmp_queries.view(1, -1, 1)
+        self.pseudo_keys = self.pseudo_keys.to(X_cntxt.device)
+        pseudo_keys = self.pseudo_keys.view(1, -1, 1)
 
-        # size = [batch_size, n_cntxt, x_transf_dim]
-        keys = self.x_encoder(X_cntxt)
+        keys, values, queries = X_cntxt, Y_cntxt, X_trgt
 
-        if self.is_encode_xy:
-            # size = [batch_size, n_cntxt, r_dim]
-            values = self.xy_encoder(keys, Y_cntxt)
-        else:
-            values = Y_cntxt
+        # size = [batch_size, n_pseudo, x_dim]
+        pseudo_keys = pseudo_keys.expand(X_cntxt.size(0),
+                                         pseudo_keys.size(1),
+                                         self.x_dim)
 
-        # size = [batch_size, n_trgt, x_transf_dim]
-        queries = self.x_encoder(X_trgt)
-
-        if self.tmp_self_attn is None:
-            # return a baseline without the tmp queries
-            return self.keys_to_tmp_attender(keys, queries, values), None
-
-        # size = [batch_size, n_tmp_trgt, r_dim]
-        tmp_queries = tmp_queries.expand(X_cntxt.size(0), tmp_queries.size(1), self.x_transf_dim)
-
-        # size = [batch_size, n_tmp, r_dim]
-        tmp_values = self.keys_to_tmp_attender(keys, tmp_queries, values)  # , density
-        tmp_values = torch.relu(tmp_values)
-        tmp_values, summary = self.tmp_self_attn(tmp_values)  # , density)
-        tmp_values = torch.relu(tmp_values)
+        # size = [batch_size, n_pseudo, r_dim]
+        pseudo_values = self.keys_to_pseudo(keys, pseudo_keys, values)
+        pseudo_values = torch.relu(pseudo_values)
+        pseudo_values = self.pseudo_self_attn(pseudo_values)
+        pseudo_values = torch.relu(pseudo_values)
 
         # size = [batch_size, n_trgt, r_dim]
-        R_attn = self.tmp_to_queries_attn(tmp_queries, queries, tmp_values)  # _
+        R_attn = self.pseudo_to_queries(pseudo_keys, queries, pseudo_values)
 
-        if self.is_skip_tmp:
-            R_attn = R_attn + torch.sigmoid(self.gate) * self.keys_to_tmp_attender(keys, queries, values)
-
-        return torch.relu(R_attn), summary
+        return torch.relu(R_attn)
 
     def set_extrapolation(self, min_max):
         """
-        Scale the temporary queries to be in a given range while keeping
+        Scale the pseudo keys to be in a given range while keeping
         the same density than during training (used for extrapolation.).
         """
-        self.tmp_queries = torch.linspace(-1, 1, self.n_tmp_queries)  # reset
+        self.pseudo_keys = torch.linspace(-1, 1, self.n_pseudo)  # reset
         current_min = -1
         current_max = 1
 
-        delta = self.tmp_queries[1] - self.tmp_queries[0]
-        n_queries_per_increment = len(self.tmp_queries) / (current_max - current_min)
+        delta = self.pseudo_keys[1] - self.pseudo_keys[0]
+        n_queries_per_increment = self.n_pseudo / (current_max - current_min)
         n_add_left = math.ceil((current_min - min_max[0]) * n_queries_per_increment)
         n_add_right = math.ceil((min_max[1] - current_max) * n_queries_per_increment)
 
         tmp_queries_l = []
         if n_add_left > 0:
             tmp_queries_l.append(torch.arange(min_max[0], current_min, delta))
+
         tmp_queries_l.append(self.tmp_queries)
 
         if n_add_right > 0:
             # add delta to not have twice the previous max boundary
             tmp_queries_l.append(torch.arange(current_max, min_max[1], delta) + delta)
+
         self.tmp_queries = torch.cat(tmp_queries_l)
+
+
+class RegularGridsConvNeuralProcess(ConvolutionalProcess):
+    """
+    Special case of a Convolutional Process [Jonathan] when the input, output and
+    pseudo points are on a grid of the same size.
+
+    Notes
+    -----
+    - Assumes that input, output and pseudo points are on the same grid
+    - Assumes that Y_cntxt is the the grid values (y_dim / channels on last dim),
+    while X_cntxt and X_trgt are confidence masks of the shape of the grid rather
+    than set of features.
+    - This cannot be used for sub-pixel interpolation / super resolution.
+    - As X_cntxt is a grid, each batch example could have a different number of
+    contexts (i.e. different number of non zeros). X_trgt still has to have the
+    same amount of non zero due to how it is computed.
+    - As we do not use a set convolution, the receptive field is easy to specify,
+    making the model much more computationally efficient.
+
+    Parameters
+    ----------
+    x_dim : int
+        Dimension of features.
+
+    y_dim : int
+        Dimension of y values.
+
+    Conv : nn.Module, optional
+        Convolution to use for the first normalized convolution.
+
+    PseudoTransformer : callable, optional
+        Object used to transform the pseudo inputs {pseudo_inp} -> {pseudo_inp}. Note
+        that the temporary queries will be uniformly sampled and you can thus use
+        a convolution instead. Example:
+            - `partial(CNN, is_chan_last=True)` : uses a multilayer CNN. To
+            be compatible with self attention the channel layer should be last.
+            - `SelfAttention` : uses a self attention layer.
+
+    kwargs :
+        Additional arguments to `ConvolutionalProcess`.
+
+    References
+    ----------
+    [Jonathan]
+    """
+
+    def __init__(self, x_dim, y_dim,
+                 # uses only depth wise + make sure positive to be interpreted as a density
+                 Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim, groups=y_dim,
+                                                             kernel_size=19, padding=19 // 2,
+                                                             bias=False),
+                 PseudoSelfAttn=partial(CNN, ResConvBlock,
+                                        Conv=nn.Conv2d,
+                                        n_blocks=3,
+                                        Normalization=nn.Identity,
+                                        is_chan_last=True,
+                                        kernel_size=11),
+                 **kwargs):
+        super().__init__(keys_to_pseudo=lambda *args, **kwargs: None,  # will redefine
+                         PseudoSelfAttn=PseudoSelfAttn,
+                         pseudo_to_queries=lambda *args, **kwargs: None)  # will redefine
+
+        self.conv = Conv(y_dim)
+        self.resizer = nn.Linear(self.y_dim * 2, self.r_dim)  # 2 because also confidence channels
+        self.density_to_conf = ProbabilityConverter(is_train_temperature=True,
+                                                    is_train_bias=True,
+                                                    trainable_dim=self.y_dim,
+                                                    # higher density => higher conf
+                                                    temperature_transformer=torch.softplus)
+
+        self.tmp_self_attender = TmpSelfAttn(self.r_dim)
+
+        self.reset_parameters()
+
+    def keys_to_pseudo(self, mask_context, _, X):
+        batch_size, *grid_shape, y_dim = X.shape
+
+        # channels have to be in second dimension for convolution
+        X = channels_to_2nd_dim(X)
+        mask_context = channels_to_2nd_dim(mask_context).float()
+
+        # a * (c f)
+        numerator = self.conv(X * mask_context)
+        # a * c
+        denominator = self.conv(mask_context.expand_as(X))
+        # normalized convolution
+        out = numerator / torch.clamp(denominator, min=1e-5)
+        # initial density could be very large => make sure not saturating sigmoid (*0.1)
+        confidence = self.density_to_conf(denominator.view(-1, self.y_dim) * 0.1
+                                          ).view(batch_size, self.y_dim, *grid_shape)
+        # don't concatenate density but a bounded version ("confidence") =>
+        # doesn't break under high density
+        out = torch.cat([out, confidence], dim=1)
+
+        out = self.resizer(channel_to_last_dim(out))
+
+        return out
+
+    def pseudo_to_queries(self, _, _, pseudo_values):
+        """Return the pseudo values a they are on the same grid as the querries."""
+        return pseudo_values
+
+    def make_dec_inp(self, X, _, mask_target):
+        """Make the context input for the decoder."""
+        batch_size, *grid_shape, y_dim = X.shape
+
+        # only works because number of targets same in all batch
+        linear_trgts = X.masked_select(mask_target).view(batch_size, -1, y_dim)
+
+        return linear_trgts

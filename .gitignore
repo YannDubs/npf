@@ -31,6 +31,7 @@ venv
 # Extensions
 *.pyc
 *.log
+*.logs
 *.sh
 *.tar
 *.zip

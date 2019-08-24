@@ -14,8 +14,7 @@ from .initialization import weights_init
 __all__ = ["get_attender"]
 
 
-def get_attender(attention, kq_size, value_size, out_size, is_normalize=True,
-                 is_relative_pos=False, **kwargs):
+def get_attender(attention, kq_size, value_size, out_size, **kwargs):
     """
     Set scorer that matches key and query to compute attention along `dim=1`.
 
@@ -42,9 +41,6 @@ def get_attender(attention, kq_size, value_size, out_size, is_normalize=True,
     out_size : int
         Output dimension.
 
-    is_normalize : bool, optional
-        Whether attention weights should sum to 1 (using softmax).
-
     kwargs :
         Additional arguments to the attender.
 
@@ -62,38 +58,30 @@ def get_attender(attention, kq_size, value_size, out_size, is_normalize=True,
         arXiv:1508.04025 (2015).
     """
     if not isinstance(attention, str):
-        return attention(kq_size, value_size, out_size,
-                         is_normalize=is_normalize, **kwargs)
+        return attention(kq_size, value_size, out_size, **kwargs)
 
     attention = attention.lower()
     if attention == 'multiplicative':
-        attender = MultiplicativeAttender(kq_size, value_size, out_size,
-                                          is_normalize=is_normalize, **kwargs)
+        attender = MultiplicativeAttender(kq_size, value_size, out_size, **kwargs)
     elif attention == 'additive':
-        attender = AdditiveAttender(kq_size, value_size, out_size,
-                                    is_normalize=is_normalize, **kwargs)
+        attender = AdditiveAttender(kq_size, value_size, out_size, **kwargs)
     elif attention == 'scaledot':
-        attender = DotAttender(kq_size, value_size, out_size,
-                               is_scale=True, is_normalize=is_normalize, **kwargs)
+        attender = DotAttender(kq_size, value_size, out_size, is_scale=True, **kwargs)
     elif attention == "cosine":
-        attender = CosineAttender(kq_size, value_size, out_size,
-                                  is_normalize=is_normalize, **kwargs)
+        attender = CosineAttender(kq_size, value_size, out_size, **kwargs)
     elif attention == "manhattan":
         attender = DistanceAttender(kq_size, value_size, out_size,
-                                    p=1, is_normalize=is_normalize, **kwargs)
+                                    p=1, **kwargs)
     elif attention == "euclidean":
         attender = DistanceAttender(kq_size, value_size, out_size,
-                                    p=2, is_normalize=is_normalize, **kwargs)
+                                    p=2, **kwargs)
     elif attention == "weighted_dist":
         attender = DistanceAttender(kq_size, value_size, out_size,
-                                    is_weight=True, p=1,
-                                    is_normalize=is_normalize, **kwargs)
+                                    is_weight=True, p=1, **kwargs)
     elif attention == "multihead":
-        attender = MultiheadAttender(kq_size, value_size, out_size,
-                                     is_relative_pos=is_relative_pos, **kwargs)
+        attender = MultiheadAttender(kq_size, value_size, out_size, **kwargs)
     elif attention == "transformer":
-        attender = TransformerAttender(kq_size, value_size, out_size,
-                                       is_relative_pos=is_relative_pos, **kwargs)
+        attender = TransformerAttender(kq_size, value_size, out_size, **kwargs)
     else:
         raise ValueError("Unknown attention method {}".format(attention))
 
@@ -113,11 +101,11 @@ class BaseAttender(abc.ABC, nn.Module):
         Final size of the value.
 
     out_size : int
-        Output dimension.
+        Output dimension. If not different than `kq_size` will do all the computation
+        with a size of `x_dim` and add a linear layer at the end to reshape.
 
     is_normalize : bool, optional
-        Whether weights should sum to 1 (using softmax). If not weights will not
-        be normalized.
+        Whether weights should sum to 1 (using softmax).
 
     dropout : float, optional
         Dropout rate to apply to the attention.
@@ -140,7 +128,7 @@ class BaseAttender(abc.ABC, nn.Module):
     def reset_parameters(self):
         weights_init(self)
 
-    def forward(self, keys, queries, values, rel_pos_enc=None, **kwargs):
+    def forward(self, keys, queries, values, **kwargs):
         """
         Compute the attention between given key and queries.
 
@@ -218,7 +206,7 @@ class DotAttender(BaseAttender):
     def score(self, keys, queries):
         # b: batch_size, q: n_queries, k: n_keys, d: kq_size
         # e.g. if keys have 4 dimension it means that different queries will
-        # be associated with different kery
+        # be associated with different keys
         keys_shape = "bqkd" if len(keys.shape) == 4 else "bkd"
         queries_shape = "bqkd" if len(queries.shape) == 4 else "bqd"
 
@@ -299,7 +287,7 @@ class AdditiveAttender(BaseAttender):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.mlp = MLP(self.kq_size * 2, 1, hidden_size=self.kq_size, Activation=nn.Tanh)
+        self.mlp = MLP(self.kq_size * 2, 1, hidden_size=self.kq_size, activation=nn.Tanh())
         self.reset_parameters()
 
     def score(self, keys, queries):
@@ -546,7 +534,7 @@ class TransformerAttender(MultiheadAttender):
         self.layer_norm1 = nn.LayerNorm(self.out_size)
         self.layer_norm2 = nn.LayerNorm(self.out_size)
         self.mlp = MLP(self.out_size, self.out_size,
-                       hidden_size=self.out_size, Activation=nn.ReLU)
+                       hidden_size=self.out_size, activation=torch.relu)
 
         self.reset_parameters()
 

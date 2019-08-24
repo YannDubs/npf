@@ -4,22 +4,33 @@ import operator
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
 from .initialization import weights_init
 
 
+def channels_to_2nd_dim(X):
+    """
+    Takes a signal with channels on the last dimension (for most operations) and
+    returns it with channels on the second dimension (for convolutions).
+    """
+    return X.permute(*([0, X.dim() - 1] + list(range(1, X.dim() - 1))))
+
+
+def channel_to_last_dim(X):
+    """
+    Takes a signal with channels on the second dimension (for convolutions) and
+    returns it with channels on the last dimension (for most operations).
+    """
+    return X.permute(*([0] + list(range(2, X.dim())) + [1]))
+
+
 def mask_and_apply(x, mask, f):
     """Applies a callable on a masked version of a input."""
     tranformed_selected = f(x.masked_select(mask))
     return x.masked_scatter(mask, tranformed_selected)
-
-# SHOULD USE partial from functools !
-def change_param(callable, **kwargs):
-    def changed_callable(*args, **kwargs2):
-        return callable(*args, **kwargs, **kwargs2)
-    return changed_callable
 
 
 def indep_shuffle_(a, axis=-1):
@@ -65,19 +76,180 @@ def rescale_range(X, old_range, new_range):
     return (((X - old_min) * new_delta) / old_delta) + new_min
 
 
-def min_max_scale(tensor, min_val=0, max_val=1, dim=0):
-    """Rescale value to be in a given range across dim."""
-    tensor = tensor.float()
-    std_tensor = (tensor - tensor.min(dim=dim, keepdim=True)[0]
-                  ) / (tensor.max(dim=dim, keepdim=True)[0] - tensor.min(dim=dim, keepdim=True)[0])
-    scaled_tensor = std_tensor * (max_val - min_val) + min_val
-    return scaled_tensor
-
-
 def MultivariateNormalDiag(loc, scale_diag):
+    """Multi variate Gaussian with a diagonal covariance function."""
     if loc.dim() < 1:
         raise ValueError("loc must be at least one-dimensional.")
     return Independent(Normal(loc, scale_diag), 1)
+
+
+def clamp(x,
+          minimum=-float("Inf"),
+          maximum=float("Inf"),
+          is_leaky=False,
+          negative_slope=0.01,
+          hard_min=None,
+          hard_max=None):
+    """
+    Clamps a tensor to the given [minimum, maximum] (leaky) bound, with
+    an optional hard clamping.
+    """
+    lower_bound = ((minimum + negative_slope * (x - minimum))
+                   if is_leaky else torch.zeros_like(x) + minimum)
+    upper_bound = ((maximum + negative_slope * (x - maximum))
+                   if is_leaky else torch.zeros_like(x) + maximum)
+    clamped = torch.max(lower_bound, torch.min(x, upper_bound))
+
+    if hard_min is not None or hard_max is not None:
+        if hard_min is None:
+            hard_min = -float("Inf")
+        elif hard_max is None:
+            hard_max = float("Inf")
+        clamped = clamp(x, minimum=hard_min, maximum=hard_max, is_leaky=False)
+
+    return clamped
+
+
+class ProbabilityConverter(nn.Module):
+    """Maps floats to probabilites (between 0 and 1), element-wise.
+
+    Parameters
+    ----------
+    min_p : float, optional
+        Minimum probability, can be useful to set greater than 0 in order to keep
+        gradient flowing if the probability is used for convex combinations of
+        different parts of the model. Note that maximum probability is `1-min_p`.
+
+    activation : {"sigmoid", "hard-sigmoid", "leaky-hard-sigmoid"}, optional
+        name of the activation to use to generate the probabilities. `sigmoid`
+        has the advantage of being smooth and never exactly 0 or 1, which helps
+        gradient flows. `hard-sigmoid` has the advantage of making all values
+        between min_p and max_p equiprobable.
+
+    is_train_temperature : bool, optional
+        Whether to train the paremeter controling the steapness of the activation.
+        This is useful when x is used for multiple tasks, and you don't want to
+        constraint its magnitude.
+
+    is_train_bias : bool, optional
+        Whether to train the bias to shift the activation. This is useful when x is
+        used for multiple tasks, and you don't want to constraint it's scale.
+
+    trainable_dim : int, optional
+        Size of the trainable bias and termperature. If `1` uses the same vale
+        across all dimension, if not should be equal to the number of input
+        dimensions to different trainable aprameters for each dimension. Note
+        that the iitial value will still be the same for all dimensions.
+
+    initial_temperature : int, optional
+        Initial temperature, a higher temperature makes the activation steaper.
+
+    initial_probability : float, optional
+        Initial probability you want to start with.
+
+    initial_x : float, optional
+        First value that will be given to the function, important to make
+        `initial_probability` work correctly.
+
+    bias_transformer : callable, optional
+        Transformer function of the bias. This function should only take care of
+        the boundaries (e.g. leaky relu or relu).
+
+    temperature_transformer : callable, optional
+        Transformer function of the temperature. This function should only take
+        care of the boundaries (e.g. leaky relu  or relu).
+    """
+
+    def __init__(self,
+                 min_p=0.,
+                 activation="sigmoid",
+                 is_train_temperature=False,
+                 is_train_bias=False,
+                 trainable_dim=1,
+                 initial_temperature=1.0,
+                 initial_probability=0.5,
+                 initial_x=0,
+                 bias_transformer=nn.Identity(),
+                 temperature_transformer=nn.Identity()
+                 ):
+
+        super().__init__()
+        self.min_p = min_p
+        self.activation = activation
+        self.is_train_temperature = is_train_temperature
+        self.is_train_bias = is_train_bias
+        self.trainable_dim = trainable_dim
+        self.initial_temperature = initial_temperature
+        self.initial_probability = initial_probability
+        self.initial_x = initial_x
+        self.bias_transformer = bias_transformer
+        self.temperature_transformer = temperature_transformer
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.temperature = torch.tensor([self.initial_temperature] * self.trainable_dim)
+        if self.is_train_temperature:
+            self.temperature = nn.Parameter(self.temperature)
+
+        initial_bias = self._probability_to_bias(self.initial_probability,
+                                                 initial_x=self.initial_x)
+
+        self.bias = torch.tensor([initial_bias] * self.trainable_dim)
+        if self.is_train_bias:
+            self.bias = nn.Parameter(self.bias)
+
+    def forward(self, x):
+        self.temperature.to(x.device())
+        self.bias.to(x.device())
+
+        temperature = self.temperature_transformer(self.temperature)
+        bias = self.bias_transformer(self.bias)
+
+        if self.activation == "sigmoid":
+            full_p = torch.sigmoid((x + bias) * temperature)
+
+        elif self.activation in ["hard-sigmoid", "leaky-hard-sigmoid"]:
+            # uses 0.2 and 0.5 to be similar to sigmoid
+            y = 0.2 * ((x + bias) * temperature) + 0.5
+
+            if self.activation == "leaky-hard-sigmoid":
+                full_p = clamp(y, minimum=0.1, maximum=0.9,
+                               is_leaky=True, negative_slope=0.01,
+                               hard_min=0, hard_max=0)
+            elif self.activation == "hard-sigmoid":
+                full_p = clamp(y, minimum=0., maximum=1., is_leaky=False)
+
+        else:
+            raise ValueError("Unkown activation : {}".format(self.activation))
+
+        p = rescale_range(full_p, (0, 1), (self.min_p, 1 - self.min_p))
+
+        return p
+
+    def _probability_to_bias(self, p, initial_x=0):
+        """Compute the bias to use to satisfy the constraints."""
+        assert p > self.min_p and p < 1 - self.min_p
+        range_p = 1 - self.min_p * 2
+        p = (p - self.min_p) / range_p
+        p = torch.tensor(p, dtype=torch.float)
+
+        if self.activation == "sigmoid":
+            bias = -(torch.log((1 - p) / p) / self.initial_temperature + initial_x)
+
+        elif self.activation in ["hard-sigmoid", "leaky-hard-sigmoid"]:
+            bias = ((p - 0.5) / 0.2) / self.initial_temperature - initial_x
+
+        return bias
+
+
+def make_abs_conv(Conv):
+    """Make a convolution have only positive parameters."""
+    class AbsConv(Conv):
+        def forward(self, input):
+            return F.conv2d(input, self.weight.abs(), self.bias, self.stride,
+                            self.padding, self.dilation, self.groups)
+    return AbsConv
 
 
 def make_depth_sep_conv(Conv):

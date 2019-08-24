@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 from neuralproc.predefined import MLP
 from .initialization import weights_init, init_param_
-from .helpers import backward_pdb, mask_and_apply
+from .helpers import backward_pdb, mask_and_apply, ProbabilityConverter
 
 __all__ = ["SetConv", "MlpRBF", "GaussianRBF"]
 
@@ -17,7 +17,7 @@ class Diff2Dist(nn.Module):
     Parameters
     ----------
     x_dim : int
-        Dimensionality of input.
+        Number of spatio-temporal input dimensions.
 
     is_weight_dim :
         Whether to weight the the different dimensions.
@@ -54,15 +54,8 @@ class GaussianRBF(nn.Module):
     x_dim : int
         Dimensionality of input.
 
-    is_normalize : bool, optional
-        Whether weights should sum to 1 (using softmax). If not weights will not
-        be normalized.
-
-    is_vanilla : bool, optional
-        Whether to force the use of the vanilla setcnn.
-
     max_dist : float, optional
-        Max distance between the closest query and target, used for intiialisation.
+        Max distance between the closest query and target, used for intialisation.
 
     max_dist_weight : float, optional
         Weight that should be given to a maximum distance. Note that min_dist_weight
@@ -72,13 +65,14 @@ class GaussianRBF(nn.Module):
         Additional arguents to `Diff2Dist`.
     """
 
-    def __init__(self, x_dim, is_normalize=True, is_vanilla=False, max_dist=1 / 256,
-                 max_dist_weight=0.5, **kwargs):
+    def __init__(self, x_dim,
+                 max_dist=1 / 256,
+                 max_dist_weight=0.5,
+                 **kwargs):
         super().__init__()
 
         self.max_dist = max_dist
         self.max_dist_weight = max_dist_weight
-        self.is_normalize = is_normalize and not is_vanilla
         self.length_scale_param = nn.Parameter(torch.tensor([0.]))
         self.diff2dist = Diff2Dist(x_dim, **kwargs)
         self.reset_parameters()
@@ -96,18 +90,12 @@ class GaussianRBF(nn.Module):
     def forward(self, diff):
         dist = self.diff2dist(diff)
 
-        length_scale_param = self.length_scale_param
         # compute exponent making sure no division by 0
-        sigma = 1e-5 + F.softplus(length_scale_param)
-        inp = - (dist / sigma).pow(2)
+        sigma = 1e-5 + F.softplus(self.length_scale_param)
 
-        if self.is_normalize:
-            # don't use fraction because numerical instability => softmax tricks
-            out = torch.softmax(inp, dim=-2)
-            density = torch.exp(inp).sum(dim=-2)
-        else:
-            out = torch.exp(inp)
-            density = out.sum(dim=-2)
+        inp = - (dist / sigma).pow(2)
+        out = torch.softmax(inp, dim=-2)  # numerically stable normalization
+        density = torch.exp(inp).sum(dim=-2)
 
         return out, density
 
@@ -118,13 +106,10 @@ class MlpRBF(nn.Module):
     Parameters
     ----------
     x_dim : int
-        Dimensionality of input.
-
-    is_add_sin : bool, optional
-        Whether to add a sinusoidal feature.
+        Number of spatio-temporal input dimensions.
 
     is_abs_dist : bool, optional
-        Whether to force the kernel to be sign invariant.
+        Whether to force the kernel to be symmetric around 0.
 
     window_size : int, bool
         Maximimum distance to consider
@@ -164,19 +149,13 @@ class MlpRBF(nn.Module):
 
 
 class SetConv(nn.Module):
-    """Applies a 1D convolution over a set of inputs, i.e. generalizes `nn._ConvNd`
-    to non uniform.
-
-    Note
-    ----
-    Corresponds to an attention mechanism if `RadialFunc=GaussianRBF` and
-    `is_normalize` (corresponds to a weighted distance attention), but differs
-    from usual attention for general `RadialFunc`.
+    """Applies a convolution over a set of inputs, i.e. generalizes `nn._ConvNd`
+    to non uniformly sampled samples [jonathan].
 
     Parameters
     ----------
     x_dim : int
-        Dimensionality of input.
+        Number of spatio-temporal dimensions of input.
 
     in_channels : int
         Number of input channels.
@@ -188,39 +167,25 @@ class SetConv(nn.Module):
         Function which returns the "weight" of each points as a function of their
         distance (i.e. for usual CNN that would be the filter).
 
-    is_concat_density : bool, optional
-        Whether to concatenate a density channel. Will concatenate the density
-        transformed by logistic function with learned temperature (making sure
-        that sample invariant).
-
-    is_vanilla : bool, optional
-        Whether to force the use of the vanilla setcnn.
-
-    max_dist : float, optional
-            Max distance between the closest query and target, used for intiialisation.
-
     kwargs :
         Additional arguments to `RadialBasisFunc`.
+
+    References
+    ----------
+    [jonathan]
     """
 
     def __init__(self, x_dim, in_channels, out_channels,
-                 RadialBasisFunc=MlpRBF,
-                 is_concat_density=True,
-                 is_vanilla=False,
-                 max_dist=1 / 256,
+                 RadialBasisFunc=GaussianRBF,
                  **kwargs):
         super().__init__()
-        self.in_channels = in_channels + is_concat_density
-        self.out_channels = out_channels
-        self.radial_basis_func = RadialBasisFunc(x_dim, is_vanilla=is_vanilla,
-                                                 max_dist=max_dist, **kwargs)
-        self.is_concat_density = is_concat_density
-        self.is_vanilla = is_vanilla
-
-        if self.is_concat_density and not self.is_vanilla:
-            self.density_transform = nn.Linear(1, 1)
-
-        self.resizer = nn.Linear(self.in_channels, self.out_channels)
+        self.radial_basis_func = RadialBasisFunc(x_dim, **kwargs)
+        self.resizer = nn.Linear(in_channels * 2, out_channels)
+        self.density_to_conf = ProbabilityConverter(is_train_temperature=True,
+                                                    is_train_bias=True,
+                                                    trainable_dim=in_channels,
+                                                    # higher density => higher conf
+                                                    temperature_transformer=torch.softplus)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -230,6 +195,11 @@ class SetConv(nn.Module):
         """
         Compute the set convolution between {key, value} and {querry}.
 
+        TODO
+        ----
+        - should sort the keys and queries to not compute differences if outside
+        of given receptive field (large memory savings).
+
         Parameters
         ----------
         keys : torch.Tensor, size=[batch_size, n_keys, kq_size]
@@ -238,7 +208,7 @@ class SetConv(nn.Module):
 
         Return
         ------
-        targets : torch.Tensor, size=[batch_size, n_queries, value_size]
+        targets : torch.Tensor, size=[batch_size, n_queries, out_channels]
         """
         # prepares for broadcasted computations
         keys = keys.unsqueeze(1)
@@ -252,21 +222,10 @@ class SetConv(nn.Module):
         # size = [batch_size, n_queries, value_size]
         targets = (weight * values).sum(dim=2)
 
-        if self.is_vanilla:
-            # constant division that works well in practive
-            targets = targets / 50
-            density = density / 50
-            targets = self.resizer(torch.cat([targets, density], dim=-1))
-            return torch.sigmoid(targets)
+        # initial density could be very large => make sure not saturating sigmoid (*0.1)
+        confidence = self.density_to_conf(density * 0.1)
+        # don't concatenate density but a bounded version ("confidence") =>
+        # doesn't break under high density
+        targets = torch.cat([targets, confidence], dim=-1)
 
-        if self.is_concat_density:
-            # same as using a smaller initialization to be close to 0.5 at start
-            # and remove 1 because if nto always positive => will saturate sigmoid
-            # detching because if has linear and sigma to change then high varince
-            density = torch.sigmoid(self.density_transform(density * 0.1 - 1))
-            # don't normalize the density channel
-            targets = torch.cat([targets, density], dim=-1)
-
-        targets = self.resizer(targets)
-
-        return targets#, density
+        return self.resizer(targets)

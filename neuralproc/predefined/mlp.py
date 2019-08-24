@@ -1,5 +1,6 @@
 import warnings
 
+import torch
 import torch.nn as nn
 
 from neuralproc.utils.initialization import linear_init
@@ -9,7 +10,7 @@ __all__ = ["MLP"]
 
 
 class MLP(nn.Module):
-    """General MLP class with residual.
+    """General MLP class.
 
     Parameters
     ----------
@@ -23,17 +24,18 @@ class MLP(nn.Module):
     n_hidden_layers: int, optional
         Number of hidden layers.
 
-    Activation: torch.nn.modules.activation, optional
-        Unitialized activation class.
+    activation: callable, optional
+        Activation function. E.g. `nn.ReLU`.
 
-    bias: bool, optional
+    is_bias: bool, optional
         Whether to use biaises in the hidden layers.
 
     dropout: float, optional
         Dropout rate.
 
     is_force_hid_smaller : bool, optional
-        Whether to force the hidden dimensions to be smaller than in and out.
+        Whether to force the hidden dimensions to be smaller or equal than in and out.
+        If not, it forces the hidden dimension to be larger or equal than in or out.
 
     is_res : bool, optional
         Whether to use residual connections.
@@ -42,8 +44,8 @@ class MLP(nn.Module):
     def __init__(self, input_size, output_size,
                  hidden_size=32,
                  n_hidden_layers=1,
-                 Activation=nn.ReLU,
-                 bias=True,
+                 activation=torch.relu,
+                 is_bias=True,
                  dropout=0,
                  is_force_hid_smaller=False,
                  is_res=False):
@@ -65,23 +67,23 @@ class MLP(nn.Module):
             warnings.warn(txt.format(hidden_size, output_size, input_size, self.hidden_size))
 
         self.dropout = (nn.Dropout(p=dropout) if dropout > 0 else nn.Identity())
-        self.activation_ = Activation(inplace=True)
+        self.activation = activation
 
-        self.to_hidden = nn.Linear(self.input_size, self.hidden_size, bias=bias)
-        self.linears = nn.ModuleList([nn.Linear(self.hidden_size, self.hidden_size, bias=bias)
+        self.to_hidden = nn.Linear(self.input_size, self.hidden_size, bias=is_bias)
+        self.linears = nn.ModuleList([nn.Linear(self.hidden_size, self.hidden_size, bias=is_bias)
                                       for _ in range(self.n_hidden_layers - 1)])
-        self.out = nn.Linear(self.hidden_size, self.output_size, bias=bias)
+        self.out = nn.Linear(self.hidden_size, self.output_size, bias=is_bias)
 
         self.reset_parameters()
 
     def forward(self, x):
         out = self.to_hidden(x)
-        self.activation_(out)
+        self.activation(out)
         x = self.dropout(out)
 
         for linear in self.linears:
             out = linear(x)
-            self.activation_(out)
+            self.activation(out)
             if self.is_res:
                 out = out + x
             out = self.dropout(out)
@@ -91,7 +93,7 @@ class MLP(nn.Module):
         return out
 
     def reset_parameters(self):
-        linear_init(self.to_hidden, activation=self.activation_)
+        linear_init(self.to_hidden, activation=self.activation)
         for lin in self.linears:
-            linear_init(lin, activation=self.activation_)
+            linear_init(lin, activation=self.activation)
         linear_init(self.out)

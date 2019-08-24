@@ -6,7 +6,7 @@ __all__ = ["NeuralProcessLoss"]
 
 class NeuralProcessLoss(nn.Module):
     """
-    Compute the Neural Process Loss [1].
+    Compute the Neural Process Loss [1] but unbiased [Jonathan].
 
     Parameters
     ----------
@@ -17,56 +17,42 @@ class NeuralProcessLoss(nn.Module):
     ----------
     [1] Garnelo, Marta, et al. "Neural processes." arXiv preprint
         arXiv:1807.01622 (2018).
+    [Jonathan]
     """
 
     def __init__(self, get_beta=lambda _: 1):
         super().__init__()
         self.get_beta = get_beta
-        self.is_use_as_metric = False
 
-    def forward(self, inputs, y=None, weight=None):
+    def forward(self, pred_outputs, Y_trgt, weight=None):
         """Compute the Neural Process Loss averaged over the batch.
 
         Parameters
         ----------
-        inputs: tuple
-            Tuple of (p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt). This can directly
-            take the output of NueralProcess.
+        pred_outputs : tuple
+            Tuple of (p_y_trgt, q_z_trgt, q_z_cntxt). Output of NeuralProcess.
 
-        y: None
-            Placeholder.
+        Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
+            Set of all target values {y_t}.
 
-        weight: torch.Tensor, size = [batch_size,]
+        weight : torch.Tensor, size = [batch_size,]
             Weight of every example. If None, every example is weighted by 1.
         """
-
-        p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary = inputs
+        p_y_trgt, q_z_trgt, q_z_cntxt = pred_outputs
         batch_size, n_trgt, _ = Y_trgt.shape
 
+        # mean over all targets => unbiased estimate of the autoregressive loss
         neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).mean(-1)
 
-        if self.is_use_as_metric:
-            # trick to use as metric => return log likelihood
-            return - neg_log_like.mean(dim=0)
-
         if q_z_trgt is not None:
-            # use latent variables and training
-            # note that during validation the kl will actually be 0 because
-            # we do not compute q_z_trgt
+            # during validation the kl will be 0 because we do not compute q_z_trgt
             kl_loss = kl_divergence(q_z_trgt, q_z_cntxt)
             # kl is multivariate Gaussian => sum over all target but we want mean
             kl_loss = kl_loss / n_trgt
         else:
             kl_loss = 0
 
-        if summary is not None:
-            summary = summary.view(batch_size, -1)
-            deltas = summary - summary.mean(0, keepdim=True)
-            deltas = deltas.abs().mean()
-        else:
-            deltas = 0
-
-        loss = neg_log_like + self.get_beta(self.training) * kl_loss + deltas
+        loss = neg_log_like + self.get_beta(self.training) * kl_loss
 
         if weight is not None:
             loss = loss * weight
