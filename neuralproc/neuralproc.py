@@ -19,7 +19,8 @@ from neuralproc.utils.setcnn import SetConv, GaussianRBF
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 
 
-__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "UnifyingNeuralProcess"]
+__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "ConvolutionalProcess",
+           "RegularGridsConvolutionalProcess"]
 
 
 class NeuralProcess(nn.Module):
@@ -71,12 +72,6 @@ class NeuralProcess(nn.Module):
             coherant predictions (not use in attentive neural process [4] but in
             image transformer [5]).
             - `discard_ith_arg(MLP, 0)` if want the decoding to only depend on r.
-
-    aggregator : callable, optional
-        Agregreator function which maps {r_i} -> r. It should have a an argument
-        `dim` specify the dimensions of aggregation. The dimension should
-        not be kept (i.e. keepdim=False). To use a cross attention aggregation,
-        use `AttentiveNeuralProcess` instead of `NeuralProcess`.
 
     LatentEncoder : nn.Module, optional
         Encoder which maps r -> z_suff_stat. It should be constructed via
@@ -132,7 +127,6 @@ class NeuralProcess(nn.Module):
                  XEncoder=None,
                  XYEncoder=None,
                  Decoder=None,
-                 aggregator=torch.mean,
                  LatentEncoder=MLP,
                  encoded_path="deterministic",
                  PredictiveDistribution=Normal,
@@ -167,7 +161,6 @@ class NeuralProcess(nn.Module):
 
         self.x_encoder = XEncoder(self.x_dim, self.x_transf_dim)
         self.xy_encoder = XYEncoder(self.x_transf_dim, self.y_dim, self.r_dim)
-        self.aggregator = aggregator
         # *2 because mean and var
         self.decoder = Decoder(self.x_transf_dim, self.r_dim, self.y_dim * 2)
 
@@ -277,7 +270,7 @@ class NeuralProcess(nn.Module):
         R_cntxt = self.xy_encoder(X_transf, Y)
 
         # size = [batch_size, r_dim]
-        r = self.aggregator(R_cntxt, dim=1)
+        r = torch.mean(R_cntxt, dim=1)
 
         z_suff_stat = self.lat_encoder(r)
         # Define sigma following convention in "Empirical Evaluation of Neural
@@ -302,7 +295,7 @@ class NeuralProcess(nn.Module):
         R_cntxt = self.xy_encoder(X_transf, Y_cntxt)
 
         # size = [batch_size, r_dim]
-        r = self.aggregator(R_cntxt, dim=1)
+        r = torch.mean(R_cntxt, dim=1)
 
         batch_size, n_trgt, _ = X_trgt.shape
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
@@ -579,7 +572,7 @@ class ConvolutionalProcess(NeuralProcess):
         self.tmp_queries = torch.cat(tmp_queries_l)
 
 
-class RegularGridsConvNeuralProcess(ConvolutionalProcess):
+class RegularGridsConvolutionalProcess(ConvolutionalProcess):
     """
     Special case of a Convolutional Process [Jonathan] when the input, output and
     pseudo points are on a grid of the same size.
@@ -676,7 +669,7 @@ class RegularGridsConvNeuralProcess(ConvolutionalProcess):
 
         return out
 
-    def pseudo_to_queries(self, _, _, pseudo_values):
+    def pseudo_to_queries(self, _, __, pseudo_values):
         """Return the pseudo values a they are on the same grid as the querries."""
         return pseudo_values
 

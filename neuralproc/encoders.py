@@ -189,7 +189,7 @@ def merge_flat_input(module, is_sum_merge=False, **kwargs):
     a few dimension of a large input.
     """
     def merged_flat_input(x_shape, flat_dim, n_out, **kwargs2):
-        assert isinstance(x_shape, int):
+        assert isinstance(x_shape, int)
         return MergeFlatInputs(module, x_shape, flat_dim, n_out,
                                is_sum_merge=is_sum_merge, **kwargs2, **kwargs)
     return merged_flat_input
