@@ -10,6 +10,7 @@ import sklearn
 
 from neuralproc.utils.helpers import rescale_range
 
+from utils.helpers import parallelize
 from .helpers import NotLoadedError, load_chunk, save_chunk
 
 
