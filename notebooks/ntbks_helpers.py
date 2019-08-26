@@ -41,16 +41,16 @@ def get_gp_datasets(n_samples=100000, n_points=128):
     return datasets
 
 
-def get_gp_datasets_varying(n_samples=10000, n_points=128, save_file=None):
+def get_gp_datasets_varying(n_samples=10000, n_points=128, save_file=None, **kwargs):
     """
     Return different 1D functions sampled from GPs with the following kernels:
     "rbf", "periodic", "non-stationary", "matern", "noisy-matern" with varying
     hyperparameters.
     """
     datasets = dict()
-    kwargs = dict(n_samples=n_samples,
-                  n_points=n_points,
-                  is_vary_kernel_hyp=False)
+    kwargs.update(dict(n_samples=n_samples,
+                       n_points=n_points,
+                       is_vary_kernel_hyp=False))
 
     def add_dataset_(name, kernel, save_file=save_file):
         if save_file is not None:

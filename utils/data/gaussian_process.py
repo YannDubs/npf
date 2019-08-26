@@ -1,3 +1,4 @@
+from functools import partial
 import logging
 
 import numpy as np
@@ -5,10 +6,12 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.gaussian_process import GaussianProcessRegressor
+import sklearn
 
 from neuralproc.utils.helpers import rescale_range
 
 from .helpers import NotLoadedError, load_chunk, save_chunk
+
 
 __all__ = ["GPDataset"]
 
@@ -45,6 +48,15 @@ class GPDataset(Dataset):
         it will generate a new sub-dataset for every epoch and save it for future
         use.
 
+    is_parallelize_sampling : bool, optional
+        Whether to precompute samples in parallel. Sampling is slow as need
+        to sample dfferent positions for all examples. This is recommended when
+        sampling a very large number of functions.
+
+    n_same_samples : int, optional
+        Mumber of samples with same kernel hyperparameters and X. This makes the
+        sampling quicker.
+
     kwargs:
         Additional arguments to `GaussianProcessRegressor`.
     """
@@ -58,6 +70,8 @@ class GPDataset(Dataset):
                  is_vary_kernel_hyp=False,
                  save_file=None,
                  logging_level=logging.INFO,
+                 is_parallelize_sampling=True,
+                 n_same_samples=20,
                  **kwargs):
 
         self.n_samples = n_samples
@@ -67,6 +81,8 @@ class GPDataset(Dataset):
         self.logger = logging.getLogger('GPDataset')
         self.logger.setLevel(logging_level)
         self.save_file = save_file
+        self.is_parallelize_sampling = is_parallelize_sampling
+        self.n_same_samples = n_same_samples
 
         self._idx_precompute = 0  # current index of precomputed data
         self._idx_chunk = 0  # current chunk (i.e. epoch)
@@ -88,8 +104,8 @@ class GPDataset(Dataset):
         # new functions
         self._idx_precompute += 1
         if self._idx_precompute == self.n_samples:
-            self._idx_precompute = 0  # DEV
-            # self.precompute_chunk_()
+            # self._idx_precompute = 0  # DEV
+            self.precompute_chunk_()
         return self.data[self._idx_precompute], self.targets[self._idx_precompute]
 
     def get_samples(self, n_samples=None, test_min_max=None,
@@ -127,7 +143,7 @@ class GPDataset(Dataset):
             data, targets = loaded["data"], loaded["targets"]
         except NotLoadedError:
             X = self._sample_features(test_min_max, n_points, n_samples)
-            targets = self._sample_targets(X, n_samples)
+            X, targets = self._sample_targets(X, n_samples)
             data = self._postprocessing_features(X, n_samples)
             save_chunk({"data": data, "targets": targets}, save_file, idx_chunk,
                        logger=self.logger)
@@ -156,25 +172,60 @@ class GPDataset(Dataset):
         return X
 
     def _sample_targets(self, X, n_samples):
-        n_points = X.shape[-1]
-        targets = X.copy()
-        for i in range(n_samples):
-            if self.is_vary_kernel_hyp:
-                self.sample_kernel_()
-            targets[i, :] = self.generator.sample_y(X[i, :, np.newaxis],
-                                                    n_samples=n_samples,
-                                                    random_state=None
-                                                    )[:, 0]
+        _target_sampler_helper = partial(_single_chunk_sampling_targets,
+                                         generator=self.generator,
+                                         is_vary_kernel_hyp=self.is_vary_kernel_hyp,
+                                         n_same_samples=self.n_same_samples)
+        if self.is_parallelize_sampling:
+            X, targets = parallelize(X, _target_sampler_helper)
+        else:
+            X, targets = _target_sampler_helper(X)
 
+        # shuffle output to not have n_same_samples consecutive
+        X, targets = sklearn.utils.shuffle(X, targets)
+        n_samples, n_points = X.shape
         targets = torch.from_numpy(targets)
         targets = targets.view(n_samples, n_points, 1).float()
-        return targets
+        return X, targets
 
-    def sample_kernel_(self):
-        """
-        Modify inplace the kernel hyperparameters through uniform sampling in their
-        respective bounds.
-        """
-        K = self.generator.kernel
-        for hyperparam in K.hyperparameters:
-            K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})
+
+def sample_kernel_(generator):
+    """
+    Modify inplace the kernel hyperparameters through uniform sampling in their
+    respective bounds.
+    """
+    K = generator.kernel
+    for hyperparam in K.hyperparameters:
+        K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})
+
+
+def _single_chunk_sampling_targets(X, generator, is_vary_kernel_hyp,
+                                   n_same_samples=20
+                                   ):
+    """Sample targets given the inputs and generator."""
+    targets = X.copy()
+    n_samples, n_points = X.shape
+    generator = sklearn.base.clone(generator)
+    for i in range(0, n_samples, n_same_samples):
+        if is_vary_kernel_hyp:
+            sample_kernel_(generator)
+
+        for attempt in range(n_same_samples):
+            # can have numerical issues => retry using a different X
+            try:
+                # takes care of boundaries
+                n_samples = targets[i:i + n_same_samples, :].shape[0]
+                targets[i:i + n_same_samples,
+                        :] = generator.sample_y(X[i + attempt, :, np.newaxis],
+                                                n_samples=n_samples,
+                                                random_state=None
+                                                ).transpose(1, 0)
+                X[i:i + n_same_samples, :] = X[i + attempt, :]
+            except np.linalg.LinAlgError:
+                continue  # try again
+            else:
+                break  # success
+        else:
+            # did not find
+            raise np.linalg.LinAlgError("SVD did not converge 10 times in a row.")
+    return X, targets
