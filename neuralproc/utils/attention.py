@@ -534,7 +534,7 @@ class TransformerAttender(MultiheadAttender):
         self.layer_norm1 = nn.LayerNorm(self.out_size)
         self.layer_norm2 = nn.LayerNorm(self.out_size)
         self.mlp = MLP(self.out_size, self.out_size,
-                       hidden_size=self.out_size, activation=torch.relu)
+                       hidden_size=self.out_size, activation=nn.ReLU())
 
         self.reset_parameters()
 

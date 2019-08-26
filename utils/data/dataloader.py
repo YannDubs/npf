@@ -1,5 +1,7 @@
 import torch
 
+__all__ = ["cntxt_trgt_collate"]
+
 
 def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False):
     """Transformes and collates inputs to neural processes given the whole input.
@@ -15,9 +17,10 @@ def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False):
         for every function. If so the batch will contain the concatenation of both.
     """
     def mycollate(batch):
+
         collated = torch.utils.data.dataloader.default_collate(batch)
         X = collated[0]
-        y = collated[0]
+        y = collated[1]
 
         if is_repeat_batch:
             X = torch.cat([X, X], dim=0)

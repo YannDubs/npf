@@ -1,4 +1,36 @@
+import numpy as np
 import torch
+
+from skorch.callbacks import Callback
+
+
+class FixRandomSeed(Callback):
+    """
+    Callback to have a deterministic behavior.
+    Credits: https://github.com/skorch-dev/skorch/issues/280
+    """
+
+    def __init__(self, seed=123, is_cudnn_deterministic=False, verbose=0):
+        self.seed = seed
+        self.is_cudnn_deterministic = is_cudnn_deterministic
+        self.verbose = verbose
+
+    def initialize(self):
+        if self.verbose > 0:
+            print("setting random seed to: ", self.seed)
+
+        if self.seed is not None:
+            torch.manual_seed(self.seed)
+            torch.cuda.manual_seed(self.seed)
+
+            try:
+                random.seed(self.seed)
+            except NameError:
+                import random
+                random.seed(self.seed)
+
+            np.random.seed(self.seed)
+        torch.backends.cudnn.deterministic = self.is_cudnn_deterministic
 
 
 def count_parameters(model):

@@ -1,6 +1,3 @@
-import math
-import sys
-import os
 import logging
 
 import numpy as np
@@ -8,7 +5,6 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.gaussian_process import GaussianProcessRegressor
-import h5py
 
 from neuralproc.utils.helpers import rescale_range
 
@@ -38,13 +34,9 @@ class GPDataset(Dataset):
     n_points : int, optional
         Number of points at which to evaluate f(x) for x in min_max.
 
-    n_diff_kernel_hyp : int, optional
-        How many randomly sampled kernel hyperparameters to use per epoch. If
-        `n_diff_kernel_hyp = 1` all the samples will be sampled from a fixed kernel.
-        If `n_diff_kernel_hyp = n_samples`, every sample will be generated from
-        different kernel hyperparameters (will be slow). If not `1` the kernel
-        hyperparameters will be uniformly sampled in the bounds `*_bounds` of the
-        kernel (note that you should fix ALL hyperparameter bounds).
+    is_vary_kernel_hyp : bool, optional
+        Whether to sample each example from a kernel with random hyperparameters,
+        that are sampled uniformly in the kernel hyperparameters `*_bounds`.
 
     save_file : string or tuple of strings, optional
         Where to save and load the dataset. If tuple `(file, group)`, save in
@@ -63,7 +55,7 @@ class GPDataset(Dataset):
                  min_max=(-2, 2),
                  n_samples=1000,
                  n_points=128,
-                 n_diff_kernel_hyp=1,
+                 is_vary_kernel_hyp=False,
                  save_file=None,
                  logging_level=logging.INFO,
                  **kwargs):
@@ -71,8 +63,7 @@ class GPDataset(Dataset):
         self.n_samples = n_samples
         self.n_points = n_points
         self.min_max = min_max
-        self.n_diff_kernel_hyp = n_diff_kernel_hyp
-        self._check_n_samples(n_samples)
+        self.is_vary_kernel_hyp = is_vary_kernel_hyp
         self.logger = logging.getLogger('GPDataset')
         self.logger.setLevel(logging_level)
         self.save_file = save_file
@@ -80,17 +71,13 @@ class GPDataset(Dataset):
         self._idx_precompute = 0  # current index of precomputed data
         self._idx_chunk = 0  # current chunk (i.e. epoch)
 
-        if n_diff_kernel_hyp == 1:
+        if not is_vary_kernel_hyp:
             # only fit hyperparam when predicting if using various hyperparam
             kwargs["optimizer"] = None
         self.generator = GaussianProcessRegressor(kernel=kernel,
                                                   alpha=0.005,  # numerical stability for preds
                                                   **kwargs)
         self.precompute_chunk_()
-
-    def _check_n_samples(self, n_samples):
-        if n_samples % self.n_diff_kernel_hyp != 0 and n_samples != 1:
-            raise ValueError("n_samples={} has to be dividable by n_diff_kernel_hyp={} or 1.".format(n_samples, self.n_diff_kernel_hyp))
 
     def __len__(self):
         return self.n_samples
@@ -101,7 +88,8 @@ class GPDataset(Dataset):
         # new functions
         self._idx_precompute += 1
         if self._idx_precompute == self.n_samples:
-            self.precompute_chunk_()
+            self._idx_precompute = 0  # DEV
+            # self.precompute_chunk_()
         return self.data[self._idx_precompute], self.targets[self._idx_precompute]
 
     def get_samples(self, n_samples=None, test_min_max=None,
@@ -133,13 +121,12 @@ class GPDataset(Dataset):
         test_min_max = test_min_max if test_min_max is not None else self.min_max
         n_points = n_points if n_points is not None else self.n_points
         n_samples = n_samples if n_samples is not None else self.n_samples
-        self._check_n_samples(n_samples)
 
         try:
             loaded = load_chunk({"data", "targets"}, save_file, idx_chunk)
             data, targets = loaded["data"], loaded["targets"]
         except NotLoadedError:
-            X = self._sample_features(test_min_max, n_points)
+            X = self._sample_features(test_min_max, n_points, n_samples)
             targets = self._sample_targets(X, n_samples)
             data = self._postprocessing_features(X, n_samples)
             save_chunk({"data": data, "targets": targets}, save_file, idx_chunk,
@@ -149,48 +136,35 @@ class GPDataset(Dataset):
 
     def precompute_chunk_(self):
         """Load or precompute and save a chunk (data for an epoch.)"""
+
         self._idx_precompute = 0
         self.data, self.targets = self.get_samples(save_file=self.save_file,
                                                    idx_chunk=self._idx_chunk)
         self._idx_chunk += 1
 
-    def _sample_features(self, min_max, n_points):
-        """Sample X with non uniform intervals, by sampling from and adding noise. """
-        X = np.linspace(*min_max, n_points)
-        # add noise (with standard deviation of "stepsize") to not be on a grid
-        X += np.random.randn(*X.shape) * (min_max[1] - min_max[0]) / n_points
-        # make sure that still in bound
-        X = X.clip(min=min_max[0], max=min_max[1])
+    def _sample_features(self, min_max, n_points, n_samples):
+        """Sample X with non uniform intervals. """
+        X = np.random.uniform(min_max[1], min_max[0], size=(n_samples, n_points))
         # sort which is convenient for plotting
-        X.sort()
+        X.sort(axis=-1)
         return X
 
     def _postprocessing_features(self, X, n_samples):
         """Convert the features to a tensor, rescale them to [-1,1] and expand."""
-        n_points = len(X)
-        X = torch.from_numpy(X)
-        X = X.view(1, -1, 1).expand(n_samples, n_points, 1).float()
+        X = torch.from_numpy(X).unsqueeze(-1).float()
         X = rescale_range(X, self.min_max, (-1, 1))
         return X
 
     def _sample_targets(self, X, n_samples):
-        n_points = len(X)
-        if self.n_diff_kernel_hyp == 1:
-            targets = self.generator.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
-        else:
-            if n_samples == 1:
+        n_points = X.shape[-1]
+        targets = X.copy()
+        for i in range(n_samples):
+            if self.is_vary_kernel_hyp:
                 self.sample_kernel_()
-                targets = self.generator.sample_y(X[:, np.newaxis], n_samples
-                                                  ).transpose(1, 0)
-            else:
-                targets = np.empty((n_samples, n_points))
-                for i in range(self.n_diff_kernel_hyp):
-                    self.sample_kernel_()
-                    # interleaves all arrays (maybe better than concat and shuffle)
-                    targets[i::self.n_diff_kernel_hyp, :
-                            ] = self.generator.sample_y(X[:, np.newaxis],
-                                                        n_samples // self.n_diff_kernel_hyp
-                                                        ).transpose(1, 0)
+            targets[i, :] = self.generator.sample_y(X[i, :, np.newaxis],
+                                                    n_samples=n_samples,
+                                                    random_state=None
+                                                    )[:, 0]
 
         targets = torch.from_numpy(targets)
         targets = targets.view(n_samples, n_points, 1).float()

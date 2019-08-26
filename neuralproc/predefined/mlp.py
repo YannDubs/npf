@@ -25,7 +25,7 @@ class MLP(nn.Module):
         Number of hidden layers.
 
     activation: callable, optional
-        Activation function. E.g. `nn.ReLU`.
+        Activation function. E.g. `nn.RelU()`.
 
     is_bias: bool, optional
         Whether to use biaises in the hidden layers.
@@ -44,7 +44,7 @@ class MLP(nn.Module):
     def __init__(self, input_size, output_size,
                  hidden_size=32,
                  n_hidden_layers=1,
-                 activation=torch.relu,
+                 activation=nn.ReLU(),
                  is_bias=True,
                  dropout=0,
                  is_force_hid_smaller=False,

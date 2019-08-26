@@ -36,7 +36,7 @@ class ConvBlock(nn.Module):
         arguments (e.g. stride).
 
     activation: callable, optional
-        Activation object. E.g. `torch.relu`.
+        Activation object. E.g. `nn.ReLU`.
 
     Normalization : nn.Module, optional
         Normalization layer (unitialized). E.g. `nn.BatchNorm1d`.
@@ -63,7 +63,7 @@ class ConvBlock(nn.Module):
                  kernel_size=5,
                  dilation=1,
                  padding=-1,
-                 activation=torch.relu,
+                 activation=nn.ReLU(),
                  Normalization=nn.Identity,
                  is_normalized_conv=True,
                  **kwargs):
@@ -109,7 +109,7 @@ class ResConvBlock(nn.Module):
         Size of the convolving kernel. Should be odd to keep the same size.
 
     activation: callable, optional
-        Activation object. E.g. `torch.relu`.
+        Activation object. E.g. `nn.RelU()`.
 
     Normalization : nn.Module, optional
         Normalization layer (unitialized). E.g. `nn.BatchNorm1d`.
@@ -130,7 +130,7 @@ class ResConvBlock(nn.Module):
 
     def __init__(self, in_chan, out_chan, Conv,
                  kernel_size=5,
-                 activation=torch.relu,
+                 activation=nn.ReLU(),
                  Normalization=nn.Identity,
                  is_bias=True):
         super().__init__()
@@ -183,7 +183,7 @@ class ResNormalizedConvBlock(ResConvBlock):
         Size of the convolving kernel. Should be odd to keep the same size.
 
     activation: nn.Module, optional
-        Activation object. E.g. `torch.relu`.
+        Activation object. E.g. `nn.RelU()`.
 
     is_bias : bool, optional
         Whether to use a bias.
@@ -197,7 +197,7 @@ class ResNormalizedConvBlock(ResConvBlock):
 
     def __init__(self, in_chan, out_chan, Conv,
                  kernel_size=5,
-                 activation=torch.relu,
+                 activation=nn.ReLU(),
                  is_bias=True):
         super().__init__(in_chan, out_chan, Conv,
                          kernel_size=kernel_size,
@@ -289,8 +289,7 @@ class CNN(nn.Module):
             channel_list = [n_channels] * n_blocks
         else:
             channel_list = list(n_channels)
-            assert (len(channel_list) == n_blocks + 1,
-                    "{} != {}".format(len(channel_list), n_blocks + 1))
+            assert len(channel_list) == (n_blocks + 1), "{} != {}".format(len(channel_list), n_blocks + 1)
 
         return list(zip(channel_list, channel_list[1:]))
 

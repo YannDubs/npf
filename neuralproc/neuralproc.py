@@ -142,8 +142,6 @@ class NeuralProcess(nn.Module):
                                                                         XEncoder,
                                                                         is_use_x,
                                                                         r_dim)
-
-        self.min_std = min_std
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.r_dim = r_dim
@@ -237,6 +235,7 @@ class NeuralProcess(nn.Module):
             Latent distribution for the context points. `None` if
             `LatentEncoder=None` or not training.
         """
+
         # input assumed to be in [-1,1] during training
         if self.training:
             if X_cntxt.max() > 1 or X_cntxt.min() < -1 or X_trgt.max() > 1 and X_trgt.min() < -1:
@@ -330,7 +329,6 @@ class NeuralProcess(nn.Module):
         X_trgt: torch.Tensor, size=[batch_size, n_trgt, x_dim]
             Set of all target features {x_t}.
         """
-
         # size = [batch_size, n_trgt, x_transf_dim]
         X_transf = self.x_encoder(X_trgt)
 
@@ -430,7 +428,7 @@ class AttentiveNeuralProcess(NeuralProcess):
         # size = [batch_size, n_cntxt, r_dim]
         values = self.xy_encoder(keys, Y_cntxt)
 
-        # size = [batch_size, n_trgt, value_size]
+        # size = [batch_size, n_trgt, r_dim]
         R_attn = self.attender(keys, queries, values, **attender_kwargs)
 
         return R_attn
