@@ -200,8 +200,8 @@ class ProbabilityConverter(nn.Module):
             self.bias = nn.Parameter(self.bias)
 
     def forward(self, x):
-        self.temperature.to(x.device())
-        self.bias.to(x.device())
+        self.temperature.to(x.device)
+        self.bias.to(x.device)
 
         temperature = self.temperature_transformer(self.temperature)
         bias = self.bias_transformer(self.bias)

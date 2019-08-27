@@ -78,12 +78,12 @@ class MLP(nn.Module):
 
     def forward(self, x):
         out = self.to_hidden(x)
-        self.activation(out)
+        out = self.activation(out)
         x = self.dropout(out)
 
         for linear in self.linears:
             out = linear(x)
-            self.activation(out)
+            out = self.activation(out)
             if self.is_res:
                 out = out + x
             out = self.dropout(out)

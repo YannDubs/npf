@@ -32,11 +32,22 @@ def plot_dataset_samples(dataset, n_samples=50, title="Dataset",
         ax.set_title(title, fontsize=14)
 
 
-def plot_prior_samples(model, **kwargs):
+def plot_prior_samples(model,
+                       test_min_max=None,
+                       train_min_max=(-2, 2),
+                       n_trgt=256,
+                       **kwargs):
     """
     Plot the mean at `n_trgt` different points for `n_samples`
     different latents (i.e. sampled functions).
     """
+    if test_min_max is None:
+        test_min_max = train_min_max
+
+    input_min_max = tuple(rescale_range(np.array(test_min_max), train_min_max, (-1, 1)))
+    X_trgt = torch.Tensor(np.linspace(*input_min_max, n_trgt))
+    X_trgt = X_trgt.view(1, -1, 1)
+
     ax = _plot_posterior_predefined_cntxt(model, None, None, X_trgt,
                                           **kwargs)
 
@@ -124,7 +135,7 @@ def plot_posterior_samples(X, Y, get_cntxt_trgt, model,
 
 def _check_input(*inp):
     for x in inp:
-        if not (x.dim() == 3 and x.dim() == 3 and x.shape[0] == 1):
+        if (x is not None) and not (x.dim() == 3 and x.dim() == 3 and x.shape[0] == 1):
             raise ValueError("input should have 3 dim with first (batch size) of 0, but `x.shape={}`.".format(x.shape))
 
 
@@ -148,7 +159,7 @@ def _get_p_y_pred(model, X_cntxt, Y_cntxt, X_trgt):
         p_y_pred, *_ = model.forward(X_cntxt, Y_cntxt, X_trgt)
     else:
         z_sample = torch.randn((1, model.r_dim))
-        r = z_sample.unsqueeze(1).expand(1, X_target.size(1), model.r_dim)
+        r = z_sample.unsqueeze(1).expand(1, X_trgt.size(1), model.r_dim)
         dec_input = model.make_dec_inp(r, z_sample, X_trgt)
         p_y_pred = model.decode(dec_input, X_trgt)
     return p_y_pred
@@ -224,6 +235,9 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
     # input to model should always be between -1 1 but not for plotting
     X_trgt_plot = rescale_range(X_trgt_plot, (-1, 1), train_min_max)
 
+    x_min = min(X_trgt_plot)
+    x_max = max(X_trgt_plot)
+
     if is_conditioned:
         X_cntxt_plot = X_cntxt.numpy()[0].flatten()
         X_cntxt_plot = rescale_range(X_cntxt_plot, (-1, 1), train_min_max)
@@ -268,12 +282,12 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
         y_min = min(y_min, Y_trgt.min())
         y_max = max(y_max, Y_trgt.max())
 
-    x_min = min(min(X_cntxt_plot), min(X_trgt_plot))
-    x_max = max(max(X_cntxt_plot), max(X_trgt_plot))
-    ax.set_xlim(x_min, x_max)
-
     if is_conditioned:
         ax.scatter(X_cntxt_plot, Y_cntxt[0, :, 0].numpy(), c='k')
+        x_min = min(min(X_cntxt_plot), x_min)
+        x_max = max(max(X_cntxt_plot), x_max)
+
+    ax.set_xlim(x_min, x_max)
 
     # extrapolation might give huge values => rescale to have y lim as interpolation
     ax.set_ylim(_rescale_ylim(y_min, y_max))

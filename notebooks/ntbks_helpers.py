@@ -38,7 +38,6 @@ def get_gp_datasets(n_samples=100000, n_points=128, save_file=None, **kwargs):
         datasets[name] = GPDataset(kernel=kernel, save_file=save_file, **kwargs)
 
     add_dataset_("Fixed_RBF_Kernel", RBF(length_scale=.1))
-    """
     add_dataset_("Fixed_Periodic_Kernel",
                  ExpSineSquared(length_scale=.3, periodicity=1.0))
     add_dataset_("Fixed_Matern_Kernel",
@@ -46,7 +45,7 @@ def get_gp_datasets(n_samples=100000, n_points=128, save_file=None, **kwargs):
     add_dataset_("Fixed_Noisy_Matern_Kernel",
                  (WhiteKernel(noise_level=.1) +
                   Matern(length_scale=.1, nu=1.5)))
-    """
+
     return datasets
 
 
@@ -85,10 +84,10 @@ get_cntxt_trgt = CntxtTrgtGetter(contexts_getter=GetRandomIndcs(min_n_indcs=0.01
 
 CNP_KWARGS = dict(XEncoder=partial(MLP, n_hidden_layers=1),
                   XYEncoder=merge_flat_input(partial(MLP, n_hidden_layers=2,
-                                                     is_force_hid_smaller=True),
+                                                     is_force_hid_smaller=True, hidden_size=64),
                                              is_sum_merge=True),
                   Decoder=merge_flat_input(partial(MLP, n_hidden_layers=2,
-                                                   is_force_hid_smaller=True),
+                                                   is_force_hid_smaller=True, hidden_size=64),
                                            is_sum_merge=True),
                   r_dim=128,
                   encoded_path="deterministic")

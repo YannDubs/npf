@@ -637,7 +637,7 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
                                                     is_train_bias=True,
                                                     trainable_dim=self.y_dim,
                                                     # higher density => higher conf
-                                                    temperature_transformer=torch.softplus)
+                                                    temperature_transformer=F.softplus)
 
         self.tmp_self_attender = TmpSelfAttn(self.r_dim)
 

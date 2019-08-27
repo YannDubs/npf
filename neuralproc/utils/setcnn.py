@@ -185,7 +185,7 @@ class SetConv(nn.Module):
                                                     is_train_bias=True,
                                                     trainable_dim=in_channels,
                                                     # higher density => higher conf
-                                                    temperature_transformer=torch.softplus)
+                                                    temperature_transformer=F.softplus)
         self.reset_parameters()
 
     def reset_parameters(self):

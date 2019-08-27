@@ -41,10 +41,6 @@ class ConvBlock(nn.Module):
     Normalization : nn.Module, optional
         Normalization layer (unitialized). E.g. `nn.BatchNorm1d`.
 
-    is_normalized_conv : bool, optional
-        Whether to use a normalized convolution [2], i.e. dividing by the
-        convolution between the kernel and the confidence.
-
     kwargs :
         Additional arguments to `Conv`.
 
@@ -65,7 +61,6 @@ class ConvBlock(nn.Module):
                  padding=-1,
                  activation=nn.ReLU(),
                  Normalization=nn.Identity,
-                 is_normalized_conv=True,
                  **kwargs):
         super().__init__()
         self.activation = activation
@@ -75,8 +70,7 @@ class ConvBlock(nn.Module):
             if kwargs.get("stride", 1) != 1:
                 warnings.warn("`padding == -1` but `stride != 1`. The output might be of different dimension as the input depending on other hyperparameters.")
 
-        if is_normalized_conv:
-            Conv = make_depth_sep_conv(Conv)
+        Conv = make_depth_sep_conv(Conv)
 
         self.conv = Conv(in_chan, out_chan, kernel_size, padding=padding, **kwargs)
         self.norm = Normalization(out_chan)
@@ -135,7 +129,6 @@ class ResConvBlock(nn.Module):
                  is_bias=True):
         super().__init__()
         self.activation = activation
-        self.is_normalized_conv = is_normalized_conv
 
         if kernel_size % 2 == 0:
             raise ValueError("`kernel_size={}`, but should be odd.".format(kernel_size))
@@ -148,7 +141,7 @@ class ResConvBlock(nn.Module):
                                                bias=is_bias)
         self.norm2 = Normalization(in_chan)
         self.conv2_depthwise = Conv(in_chan, in_chan, kernel_size,
-                                    groups=in_chan, bias=is_bias)
+                                    padding=padding, groups=in_chan, bias=is_bias)
         self.conv2_pointwise = Conv(in_chan, out_chan, 1, bias=is_bias)
 
         self.reset_parameters()
@@ -230,7 +223,7 @@ class ResNormalizedConvBlock(ResConvBlock):
 
         # make sure that confidence cannot decrease and cannot be greater than 1
         conf_2 = conf_1 + torch.sigmoid(density *
-                                        torch.softplus(self.temperature) +
+                                        F.softplus(self.temperature) +
                                         self.bias)
         conf_2 = conf_2.clamp(max=1)
         out = out + X
