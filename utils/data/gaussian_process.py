@@ -10,7 +10,6 @@ import sklearn
 
 from neuralproc.utils.helpers import rescale_range
 
-from utils.helpers import parallelize
 from .helpers import NotLoadedError, load_chunk, save_chunk
 
 
@@ -49,11 +48,6 @@ class GPDataset(Dataset):
         it will generate a new sub-dataset for every epoch and save it for future
         use.
 
-    is_parallelize_sampling : bool, optional
-        Whether to precompute samples in parallel. Sampling is slow as need
-        to sample dfferent positions for all examples. This is recommended when
-        sampling a very large number of functions.
-
     n_same_samples : int, optional
         Mumber of samples with same kernel hyperparameters and X. This makes the
         sampling quicker.
@@ -71,7 +65,6 @@ class GPDataset(Dataset):
                  is_vary_kernel_hyp=False,
                  save_file=None,
                  logging_level=logging.INFO,
-                 is_parallelize_sampling=True,
                  n_same_samples=20,
                  **kwargs):
 
@@ -82,7 +75,6 @@ class GPDataset(Dataset):
         self.logger = logging.getLogger('GPDataset')
         self.logger.setLevel(logging_level)
         self.save_file = save_file
-        self.is_parallelize_sampling = is_parallelize_sampling
         self.n_same_samples = n_same_samples
 
         self._idx_precompute = 0  # current index of precomputed data
@@ -173,60 +165,41 @@ class GPDataset(Dataset):
         return X
 
     def _sample_targets(self, X, n_samples):
-        _target_sampler_helper = partial(_single_chunk_sampling_targets,
-                                         generator=self.generator,
-                                         is_vary_kernel_hyp=self.is_vary_kernel_hyp,
-                                         n_same_samples=self.n_same_samples)
-        if self.is_parallelize_sampling:
-            X, targets = parallelize(X, _target_sampler_helper)
-        else:
-            X, targets = _target_sampler_helper(X)
+        targets = X.copy()
+        n_samples, n_points = X.shape
+        for i in range(0, n_samples, self.n_same_samples):
+            if self.is_vary_kernel_hyp:
+                self.sample_kernel_()
+
+            for attempt in range(self.n_same_samples):
+                # can have numerical issues => retry using a different X
+                try:
+                    # takes care of boundaries
+                    n_same_samples = targets[i:i + self.n_same_samples, :].shape[0]
+                    targets[i:i + self.n_same_samples,
+                            :] = self.generator.sample_y(X[i + attempt, :, np.newaxis],
+                                                         n_samples=n_same_samples,
+                                                         random_state=None
+                                                         ).transpose(1, 0)
+                    X[i:i + self.n_same_samples, :] = X[i + attempt, :]
+                except np.linalg.LinAlgError:
+                    continue  # try again
+                else:
+                    break  # success
+            else:
+                raise np.linalg.LinAlgError("SVD did not converge 10 times in a row.")
 
         # shuffle output to not have n_same_samples consecutive
         X, targets = sklearn.utils.shuffle(X, targets)
-        n_samples, n_points = X.shape
         targets = torch.from_numpy(targets)
         targets = targets.view(n_samples, n_points, 1).float()
         return X, targets
 
-
-def sample_kernel_(generator):
-    """
-    Modify inplace the kernel hyperparameters through uniform sampling in their
-    respective bounds.
-    """
-    K = generator.kernel
-    for hyperparam in K.hyperparameters:
-        K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})
-
-
-def _single_chunk_sampling_targets(X, generator, is_vary_kernel_hyp,
-                                   n_same_samples=20
-                                   ):
-    """Sample targets given the inputs and generator."""
-    targets = X.copy()
-    n_samples, n_points = X.shape
-    generator = sklearn.base.clone(generator)
-    for i in range(0, n_samples, n_same_samples):
-        if is_vary_kernel_hyp:
-            sample_kernel_(generator)
-
-        for attempt in range(n_same_samples):
-            # can have numerical issues => retry using a different X
-            try:
-                # takes care of boundaries
-                n_samples = targets[i:i + n_same_samples, :].shape[0]
-                targets[i:i + n_same_samples,
-                        :] = generator.sample_y(X[i + attempt, :, np.newaxis],
-                                                n_samples=n_samples,
-                                                random_state=None
-                                                ).transpose(1, 0)
-                X[i:i + n_same_samples, :] = X[i + attempt, :]
-            except np.linalg.LinAlgError:
-                continue  # try again
-            else:
-                break  # success
-        else:
-            # did not find
-            raise np.linalg.LinAlgError("SVD did not converge 10 times in a row.")
-    return X, targets
+    def sample_kernel_(self):
+        """
+        Modify inplace the kernel hyperparameters through uniform sampling in their
+        respective bounds.
+        """
+        K = self.generator.kernel
+        for hyperparam in K.hyperparameters:
+            K.set_params(**{hyperparam.name: np.random.uniform(*hyperparam.bounds.squeeze())})

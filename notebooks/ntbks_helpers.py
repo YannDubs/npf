@@ -17,7 +17,7 @@ from utils.data import GPDataset
 
 ### TUTORIAL 1 ###
 # DATA
-def get_gp_datasets(n_samples=100000, n_points=128):
+def get_gp_datasets(n_samples=100000, n_points=128, save_file=None, **kwargs):
     """
     Return different 1D functions sampled from GPs with the following kernels:
     "rbf", "periodic", "non-stationary", "matern", "noisy-matern".
@@ -28,16 +28,25 @@ def get_gp_datasets(n_samples=100000, n_points=128):
     Tested empirically.
     """
     datasets = dict()
-    kwargs = dict(n_samples=n_samples, n_points=n_points)
-    datasets["rbf"] = GPDataset(kernel=RBF(length_scale=.1),
-                                **kwargs)
-    datasets["periodic"] = GPDataset(kernel=ExpSineSquared(length_scale=.3, periodicity=1.0),
-                                     **kwargs)
-    datasets["matern"] = GPDataset(kernel=Matern(length_scale=.1, nu=1.5),
-                                   **kwargs)
-    datasets["noisy-matern"] = GPDataset(kernel=(WhiteKernel(noise_level=.1) +
-                                                 Matern(length_scale=.1, nu=1.5)),
-                                         **kwargs)
+    kwargs.update(dict(n_samples=n_samples,
+                       n_points=n_points,
+                       is_vary_kernel_hyp=False))
+
+    def add_dataset_(name, kernel, save_file=save_file):
+        if save_file is not None:
+            save_file = (save_file, name)
+        datasets[name] = GPDataset(kernel=kernel, save_file=save_file, **kwargs)
+
+    add_dataset_("Fixed_RBF_Kernel", RBF(length_scale=.1))
+    """
+    add_dataset_("Fixed_Periodic_Kernel",
+                 ExpSineSquared(length_scale=.3, periodicity=1.0))
+    add_dataset_("Fixed_Matern_Kernel",
+                 Matern(length_scale=.1, nu=1.5))
+    add_dataset_("Fixed_Noisy_Matern_Kernel",
+                 (WhiteKernel(noise_level=.1) +
+                  Matern(length_scale=.1, nu=1.5)))
+    """
     return datasets
 
 
@@ -50,17 +59,14 @@ def get_gp_datasets_varying(n_samples=10000, n_points=128, save_file=None, **kwa
     datasets = dict()
     kwargs.update(dict(n_samples=n_samples,
                        n_points=n_points,
-                       is_vary_kernel_hyp=False))
+                       is_vary_kernel_hyp=True))
 
     def add_dataset_(name, kernel, save_file=save_file):
         if save_file is not None:
             save_file = (save_file, name)
         datasets[name] = GPDataset(kernel=kernel, save_file=save_file, **kwargs)
 
-    add_dataset_("RBF", RBF(length_scale=.1))
-    """
     add_dataset_("RBF_Kernel", RBF(length_scale_bounds=(.02, .3)))
-
     add_dataset_("Periodic_Kernel",
                  ExpSineSquared(length_scale_bounds=(.2, .5), periodicity_bounds=(.5, 2.)))
     add_dataset_("Matern_Kernel",
@@ -68,7 +74,6 @@ def get_gp_datasets_varying(n_samples=10000, n_points=128, save_file=None, **kwa
     add_dataset_("Noisy_Matern_Kernel",
                  (WhiteKernel(noise_level_bounds=(.05, .7)) +
                   Matern(length_scale_bounds=(.03, .3), nu=1.5)))
-    """
 
     return datasets
 
