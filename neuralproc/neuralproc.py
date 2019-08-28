@@ -177,8 +177,10 @@ class NeuralProcess(nn.Module):
         weights_init(self)
 
     def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
-        dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
-        dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
+        dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True,
+                                   hidden_size=64)
+        dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True,
+                                     hidden_size=64)
 
         # don't use `x` to be translation equivariant
         if not is_use_x:
@@ -528,7 +530,7 @@ class ConvolutionalProcess(NeuralProcess):
         keys, values, queries = X_cntxt, Y_cntxt, X_trgt
 
         # size = [batch_size, n_pseudo, x_dim]
-        pseudo_keys = pseudo_keys.expand(X_cntxt.size(0),
+        pseudo_keys = pseudo_keys.expand(keys.size(0),
                                          pseudo_keys.size(1),
                                          self.x_dim)
 
@@ -557,17 +559,17 @@ class ConvolutionalProcess(NeuralProcess):
         n_add_left = math.ceil((current_min - min_max[0]) * n_queries_per_increment)
         n_add_right = math.ceil((min_max[1] - current_max) * n_queries_per_increment)
 
-        tmp_queries_l = []
+        pseudo_keys_l = []
         if n_add_left > 0:
-            tmp_queries_l.append(torch.arange(min_max[0], current_min, delta))
+            pseudo_keys_l.append(torch.arange(min_max[0], current_min, delta))
 
-        tmp_queries_l.append(self.tmp_queries)
+        pseudo_keys_l.append(self.pseudo_keys)
 
         if n_add_right > 0:
             # add delta to not have twice the previous max boundary
-            tmp_queries_l.append(torch.arange(current_max, min_max[1], delta) + delta)
+            pseudo_keys_l.append(torch.arange(current_max, min_max[1], delta) + delta)
 
-        self.tmp_queries = torch.cat(tmp_queries_l)
+        self.pseudo_keys = torch.cat(pseudo_keys_l)
 
 
 class RegularGridsConvolutionalProcess(ConvolutionalProcess):
