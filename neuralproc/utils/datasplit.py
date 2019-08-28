@@ -126,15 +126,13 @@ class CntxtTrgtGetter:
                  contexts_getter=GetRandomIndcs(),
                  targets_getter=get_all_indcs,
                  is_add_cntxts_to_trgts=True,
-                 is_rm_cntxts_from_trgts=False):
+                 is_rm_cntxts_from_trgts=False,
+                 is_grided=False):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
         self.is_rm_cntxts_from_trgts = is_rm_cntxts_from_trgts
         assert not(self.is_add_cntxts_to_trgts and self.is_rm_cntxts_from_trgts)
-
-        # temporary args that can be changed without chaning the real ones (tmp)
-        self.tmp_args = dict()
 
     def __call__(self, X, y=None, context_indcs=None, target_indcs=None):
         """

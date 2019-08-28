@@ -24,6 +24,8 @@ def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False):
 
         if is_repeat_batch:
             X = torch.cat([X, X], dim=0)
+            if y is not None:
+                y = torch.cat([y, y], dim=0)
             y = torch.cat([y, y], dim=0)
 
         X_cntxt, Y_cntxt, X_trgt, Y_trgt = get_cntxt_trgt(X, y)
