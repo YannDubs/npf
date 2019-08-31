@@ -9,6 +9,7 @@ import logging
 import matplotlib.pyplot as plt
 from PIL import Image
 from tqdm import tqdm
+import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 
@@ -17,11 +18,13 @@ from skorch.utils import to_numpy
 from .helpers import random_translation, preprocess
 
 DIR = os.path.abspath(os.path.dirname(__file__))
-COLOUR_BLACK = 0
-COLOUR_WHITE = 1
+COLOUR_BLACK = torch.tensor([0., 0., 0.])
+COLOUR_WHITE = torch.tensor([1., 1., 1.])
+COLOUR_BLUE = torch.tensor([0., 0., 1.])
 DATASETS_DICT = {"mnist": "MNIST",
                  "svhn": "SVHN",
-                 "celeba": "CelebA"}
+                 "celeba32": "CelebA32",
+                 "celeba64": "CelebA64"}
 DATASETS = list(DATASETS_DICT.keys())
 
 
@@ -40,11 +43,6 @@ def get_dataset(dataset):
 def get_img_size(dataset):
     """Return the correct image size."""
     return get_dataset(dataset).shape
-
-
-def get_background(dataset):
-    """Return the image background color."""
-    return get_dataset(dataset).background_color
 
 
 # TORCHVISION DATASETS
@@ -75,7 +73,7 @@ class SVHN(datasets.SVHN):
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
     shape = (3, 32, 32)
-    background_color = COLOUR_WHITE
+    missing_px_color = COLOUR_BLACK
     n_classes = 10
 
     def __init__(self,
@@ -85,8 +83,8 @@ class SVHN(datasets.SVHN):
                  **kwargs):
 
         if split == "train":
-            transforms_list = [transforms.Lambda(lambda x: random_translation(x, 2)),
-                               transforms.ToTensor()]
+            transforms_list = [  # transforms.Lambda(lambda x: random_translation(x, 2)),
+                transforms.ToTensor()]
         elif split == "test":
             transforms_list = [transforms.ToTensor()]
         else:
@@ -126,7 +124,7 @@ class MNIST(datasets.MNIST):
     """
     shape = (1, 32, 32)
     n_classes = 10
-    background_color = COLOUR_BLACK
+    missing_px_color = COLOUR_BLUE
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/MNIST'),
@@ -196,7 +194,7 @@ class ExternalDataset(Dataset, abc.ABC):
         pass
 
 
-class CelebA(ExternalDataset):
+class CelebA64(ExternalDataset):
     """CelebA Dataset from [1].
 
     CelebFaces Attributes Dataset (CelebA) is a large-scale face attributes dataset
@@ -224,10 +222,10 @@ class CelebA(ExternalDataset):
     urls = {"train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"}
     files = {"train": "img_align_celeba"}
     shape = (3, 64, 64)
-    background_color = COLOUR_WHITE
+    missing_px_color = COLOUR_BLACK
     n_classes = 0  # not classification
 
-    def __init__(self, root=os.path.join(DIR, '../../data/celeba'), **kwargs):
+    def __init__(self, root=os.path.join(DIR, '../../data/celeba64'), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
         self.imgs = glob.glob(self.train_data + '/*')
@@ -277,3 +275,12 @@ class CelebA(ExternalDataset):
         # no label so return 0 (note that can't return None because)
         # dataloaders requires so
         return img, 0
+
+
+class CelebA32(CelebA64):
+    shape = (3, 32, 32)
+
+    def __init__(self, root=os.path.join(DIR, '../../data/celeba32'), **kwargs):
+        super().__init__(root, *kwargs)
+
+        self.imgs = glob.glob(self.train_data + '/*')

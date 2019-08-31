@@ -16,17 +16,25 @@ __all__ = ["plot_dataset_samples_1d", "plot_prior_samples_1d",
            "plot_posterior_samples_1d", "plot_losses"]
 
 
-def plot_losses(history, title=None, figsize=DFLT_FIGSIZE, ax=None):
-    """Plot the training and testing losses given a skorch history."""
-
-    valid_losses = [ep['valid_loss'] for ep in history]
-    train_losses = [ep['train_loss'] for ep in history]
+def plot_losses(history,
+                title=None,
+                figsize=DFLT_FIGSIZE,
+                ax=None,
+                mode="both",
+                label_sfx=""):
+    """Plot the `training`, `validation` or `both` losses given a skorch history."""
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    ax.plot(train_losses, label="Training")
-    ax.plot(valid_losses, label="Validation")
+    if mode in ["both", "validation"]:
+        valid_losses = [ep['valid_loss'] for ep in history]
+        ax.plot(valid_losses, label="Validation" + label_sfx)
+
+    if mode in ["both", "training"]:
+        train_losses = [ep['train_loss'] for ep in history]
+        ax.plot(train_losses, label="Training" + label_sfx)
+
     ax.legend()
     ax.set_ylabel("Negative Log Likelihood")
     ax.set_xlabel("Number of Epochs")

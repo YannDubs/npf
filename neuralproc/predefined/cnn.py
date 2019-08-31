@@ -4,7 +4,7 @@ from torch.nn import functional as F
 
 from neuralproc.utils.initialization import weights_init, init_param_
 from neuralproc.utils.helpers import (make_depth_sep_conv, channels_to_2nd_dim,
-                                      channel_to_last_dim)
+                                      channels_to_last_dim)
 
 __all__ = ["ConvBlock", "ResNormalizedConvBlock", "ResConvBlock", "CNN", "UnetCNN"]
 
@@ -73,7 +73,7 @@ class ConvBlock(nn.Module):
         Conv = make_depth_sep_conv(Conv)
 
         self.conv = Conv(in_chan, out_chan, kernel_size, padding=padding, **kwargs)
-        self.norm = Normalization(out_chan)
+        self.norm = Normalization(in_chan)
 
         self.reset_parameters()
 
@@ -293,7 +293,7 @@ class CNN(nn.Module):
         X, representation = self.apply_convs(X)
 
         if self.is_chan_last:
-            X = channel_to_last_dim(X)
+            X = channels_to_last_dim(X)
 
         if self.is_return_rep:
             return X, representation
@@ -307,7 +307,7 @@ class CNN(nn.Module):
 
 
 class UnetCNN(CNN):
-    """Unet [?].
+    """Unet [1].
 
     Parameters
     ----------
@@ -323,14 +323,21 @@ class UnetCNN(CNN):
     Pool : nn.Module
         Pooling layer (unitialized). E.g. torch.nn.MaxPool1d.
 
-    upsample_mode
+    upsample_mode : {'nearest', 'linear', bilinear', 'bicubic', 'trilinear'}
+        The upsampling algorithm: nearest, linear (1D-only), bilinear, bicubic
+        (2D-only), trilinear (3D-only).
 
     max_nchannels : int, optional
         Bounds the maximum number of channels instead of always doubling them at
         downsampling block.
 
+    pooling_size : int or tuple, optional
+        Size of the pooling filter.
+
     is_force_same_bottleneck : bool, optional
-        Whether the channels are on the last dimension of the input.
+        Whether to use the average bottleneck for the same functions sampled at
+        different context and target. If `True` the first and second halves
+        of a batch should contain different samples of the same functions (in order).
 
     is_return_rep : bool, optional
         Whether to return a summary representation, that corresponds to the
@@ -338,33 +345,41 @@ class UnetCNN(CNN):
 
     kwargs :
         Additional arguments to `ConvBlock`.
+
+    References
+    ----------
+    [1] Ronneberger, Olaf, Philipp Fischer, and Thomas Brox. "U-net: Convolutional
+        networks for biomedical image segmentation." International Conference on
+        Medical image computing and computer-assisted intervention. Springer, Cham, 2015.
     """
 
     def __init__(self, n_channels, ConvBlock, Pool, upsample_mode,
                  max_nchannels=256,
+                 pooling_size=2,
                  is_force_same_bottleneck=False,
                  is_return_rep=False,
                  **kwargs):
 
         self.max_nchannels = max_nchannels
         super().__init__(n_channels, ConvBlock, **kwargs)
+        self.pooling_size = pooling_size
         self.pooling = Pool(self.pooling_size)
         self.upsample_mode = upsample_mode
         self.is_force_same_bottleneck = is_force_same_bottleneck
         self.is_return_rep = is_return_rep
 
     def apply_convs(self, X):
-        n_down_blocks = n_blocks // 2
+        n_down_blocks = self.n_blocks // 2
         residuals = [None] * n_down_blocks
 
         # Down
         for i in range(n_down_blocks):
-            X = self.convs[i](X)
+            X = self.conv_blocks[i](X)
             residuals[i] = X
             X = self.pooling(X)
 
         # Bottleneck
-        X = self.convs[n_down_blocks](X)
+        X = self.conv_blocks[n_down_blocks](X)
         # Representation before forcing same bottleneck
         representation = X.view(*X.shape[:2], -1).mean(-1)
 
@@ -380,13 +395,13 @@ class UnetCNN(CNN):
             X = torch.cat([X_mean, X_mean], dim=0)
 
         # Up
-        for i in range(n_down_blocks + 1, n_blocks):
+        for i in range(n_down_blocks + 1, self.n_blocks):
             X = F.interpolate(X,
                               mode=self.upsample_mode,
                               scale_factor=self.pooling_size,
                               align_corners=True)
             X = torch.cat((X, residuals[n_down_blocks - i]), dim=1)  # concat on channels
-            X = self.convs[i](X)
+            X = self.conv_blocks[i](X)
 
         return X, representation
 
@@ -395,13 +410,15 @@ class UnetCNN(CNN):
         # doubles at every down layer, as in vanilla U-net
         factor_chan = 2
 
-        assert n_layers % 2 == 1, "n_blocks={} not odd".format(n_blocks)
+        assert n_blocks % 2 == 1, "n_blocks={} not odd".format(n_blocks)
         # e.g. if n_channels=16, n_blocks=5: [16, 32, 64]
         channel_list = [factor_chan**i * n_channels for i in range(n_blocks // 2 + 1)]
         # e.g.: [16, 32, 64, 64, 32, 16]
         channel_list = channel_list + channel_list[::-1]
-        # bound max number of channels by self.max_nchannels
-        channel_list = [min(c, self.max_nchannels) for c in channel_list]
+        # bound max number of channels by self.max_nchannels (besides first and
+        # last dim as this is input / output cand sohould not be changed)
+        channel_list = channel_list[:1] + [min(c, self.max_nchannels) for c in channel_list[1:-1]
+                                           ] + channel_list[-1:]
         # e.g.: [(16, 32), (32,64), (64, 64), (64, 32), (32, 16)]
         in_out_channels = super()._get_in_out_channels(channel_list, n_blocks)
         # e.g.: [(16, 32), (32,64), (64, 64), (128, 32), (64, 16)] due to concat

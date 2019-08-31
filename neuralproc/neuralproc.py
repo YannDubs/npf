@@ -11,7 +11,7 @@ from neuralproc.predefined import MLP, CNN, UnetCNN, ResConvBlock
 from neuralproc.utils.initialization import weights_init, init_param_
 from neuralproc.utils.helpers import (MultivariateNormalDiag, ProbabilityConverter,
                                       make_abs_conv, channels_to_2nd_dim,
-                                      channel_to_last_dim)
+                                      channels_to_last_dim)
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
@@ -56,7 +56,7 @@ class NeuralProcess(nn.Module):
         parameter dependent default. Example:
             - `merge_flat_input(MLP, is_sum_merge=False)` : learn representation
             with MLP. `merge_flat_input` concatenates (or sums) X and Y inputs.
-            - `merge_flat_input(SelfAttention, is_sum_merge=True)` : self attention
+            - `E` : self attention
             mechanisms as [4]. For more parameters (attention type, number of
             layers ...) refer to its docstrings.
             - `discard_ith_arg(MLP, 0)` if want the encoding to only depend on Y.
@@ -240,8 +240,8 @@ class NeuralProcess(nn.Module):
 
         # input assumed to be in [-1,1] during training
         if self.training:
-            if X_cntxt.max() > 1 or X_cntxt.min() < -1 or X_trgt.max() > 1 and X_trgt.min() < -1:
-                raise ValueError("Position inputs during training should be in [-1,1]. {} < X_cntxt < {} ; {} < X_trgt < {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
+            if X_cntxt.max().item() > 1 or X_cntxt.min().item() < -1 or X_trgt.max().item() > 1 and X_trgt.min().item() < -1:
+                raise ValueError("Position inputs during training should be in [-1,1]. {} <= X_cntxt <= {} ; {} <= X_trgt <= {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
 
         R_det, z_sample, q_z_cntxt, q_z_trgt = None, None, None, None
 
@@ -453,7 +453,7 @@ class ConvolutionalProcess(NeuralProcess):
         Number of pseudo-inputs (temporary queries) to use. The pseudo-inputs
         will be regularaly sampled.
 
-    inp_to_pseudoinp : callable or str, optional
+    InpToPseudo : callable or str, optional
         Callable or name of attention to use for {inp} -> {pseudo_inp}.
         More details in `get_attender`. Example:
             - `SetConv` : uses a set convolution as in the paper.
@@ -467,7 +467,7 @@ class ConvolutionalProcess(NeuralProcess):
             be compatible with self attention the channel layer should be last.
             - `SelfAttention` : uses a self attention layer.
 
-    pseudoinp_to_out : callable or str, optional
+    PeudoToOut : callable or str, optional
         Callable or name of attention to use for {pseudo_inp} -> {r_trgt}.
         More details in `get_attender`. Example:
             - `SetConv` : uses a set convolution as in the paper.
@@ -491,14 +491,15 @@ class ConvolutionalProcess(NeuralProcess):
 
     def __init__(self, x_dim, y_dim,
                  n_pseudo=256,
-                 keys_to_pseudo=SetConv,
-                 PseudoSelfAttn=partial(CNN, ResConvBlock,
-                                        Conv=nn.Conv1d,
-                                        n_blocks=3,
-                                        Normalization=nn.Identity,
-                                        is_chan_last=True,
-                                        kernel_size=11),
-                 pseudo_to_queries=SetConv,
+                 InpToPseudo=SetConv,
+                 PseudoTransformer=partial(CNN,
+                                           ConvBlock=ResConvBlock,
+                                           Conv=nn.Conv1d,
+                                           n_blocks=3,
+                                           Normalization=nn.Identity,
+                                           is_chan_last=True,
+                                           kernel_size=11),
+                 PseudoToOut=SetConv,
                  **kwargs):
 
         super().__init__(x_dim, y_dim,
@@ -509,10 +510,15 @@ class ConvolutionalProcess(NeuralProcess):
 
         self.n_pseudo = n_pseudo
         self.pseudo_keys = torch.linspace(-1, 1, self.n_pseudo)
-        self.keys_to_pseudo = get_attender(keys_to_pseudo, self.x_dim,
-                                           self.y_dim, self.r_dim)
-        self.pseudo_self_attn = PseudoSelfAttn(self.r_dim)
-        self.pseudo_to_queries = get_attender(pseudo_to_queries, self.x_dim,
+
+        if InpToPseudo is not None:
+            self.inp_to_pseudo = get_attender(InpToPseudo, self.x_dim,
+                                              self.y_dim, self.r_dim)
+
+        self.pseudo_transformer = PseudoTransformer(self.r_dim)
+
+        if PseudoToOut is not None:
+            self.pseudo_to_out = get_attender(PseudoToOut, self.x_dim,
                                               self.r_dim, self.r_dim)
         self.reset_parameters()
 
@@ -535,13 +541,13 @@ class ConvolutionalProcess(NeuralProcess):
                                          self.x_dim)
 
         # size = [batch_size, n_pseudo, r_dim]
-        pseudo_values = self.keys_to_pseudo(keys, pseudo_keys, values)
+        pseudo_values = self.inp_to_pseudo(keys, pseudo_keys, values)
         pseudo_values = torch.relu(pseudo_values)
-        pseudo_values = self.pseudo_self_attn(pseudo_values)
+        pseudo_values = self.pseudo_transformer(pseudo_values)
         pseudo_values = torch.relu(pseudo_values)
 
         # size = [batch_size, n_trgt, r_dim]
-        R_attn = self.pseudo_to_queries(pseudo_keys, queries, pseudo_values)
+        R_attn = self.pseudo_to_out(pseudo_keys, queries, pseudo_values)
 
         return torch.relu(R_attn)
 
@@ -619,19 +625,24 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
 
     def __init__(self, x_dim, y_dim,
                  # uses only depth wise + make sure positive to be interpreted as a density
-                 Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim, groups=y_dim,
-                                                             kernel_size=19, padding=19 // 2,
+                 Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim,
+                                                             groups=y_dim,
+                                                             kernel_size=11,
+                                                             padding=11 // 2,  # kernel /2
                                                              bias=False),
-                 PseudoSelfAttn=partial(CNN, ResConvBlock,
-                                        Conv=nn.Conv2d,
-                                        n_blocks=3,
-                                        Normalization=nn.Identity,
-                                        is_chan_last=True,
-                                        kernel_size=11),
+                 PseudoTransformer=partial(CNN,
+                                           ConvBlock=ResConvBlock,
+                                           Conv=nn.Conv2d,
+                                           n_blocks=3,
+                                           Normalization=nn.Identity,
+                                           is_chan_last=True,
+                                           kernel_size=11),
                  **kwargs):
-        super().__init__(keys_to_pseudo=lambda *args, **kwargs: None,  # will redefine
-                         PseudoSelfAttn=PseudoSelfAttn,
-                         pseudo_to_queries=lambda *args, **kwargs: None)  # will redefine
+        super().__init__(x_dim, y_dim,
+                         InpToPseudo=None,  # will redefine
+                         PseudoTransformer=PseudoTransformer,
+                         PseudoToOut=None,  # will redefine
+                         **kwargs)
 
         self.conv = Conv(y_dim)
         self.resizer = nn.Linear(self.y_dim * 2, self.r_dim)  # 2 because also confidence channels
@@ -641,11 +652,9 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
                                                     # higher density => higher conf
                                                     temperature_transformer=F.softplus)
 
-        self.tmp_self_attender = TmpSelfAttn(self.r_dim)
-
         self.reset_parameters()
 
-    def keys_to_pseudo(self, mask_context, _, X):
+    def inp_to_pseudo(self, mask_context, _, X):
         batch_size, *grid_shape, y_dim = X.shape
 
         # channels have to be in second dimension for convolution
@@ -665,11 +674,11 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
         # doesn't break under high density
         out = torch.cat([out, confidence], dim=1)
 
-        out = self.resizer(channel_to_last_dim(out))
+        out = self.resizer(channels_to_last_dim(out))
 
         return out
 
-    def pseudo_to_queries(self, _, __, pseudo_values):
+    def pseudo_to_out(self, _, __, pseudo_values):
         """Return the pseudo values a they are on the same grid as the querries."""
         return pseudo_values
 

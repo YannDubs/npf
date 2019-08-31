@@ -3,7 +3,9 @@ import torch
 __all__ = ["cntxt_trgt_collate"]
 
 
-def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False):
+def cntxt_trgt_collate(get_cntxt_trgt,
+                       is_repeat_batch=False,
+                       **kwargs):
     """Transformes and collates inputs to neural processes given the whole input.
 
     Parameters
@@ -28,8 +30,7 @@ def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False):
                 y = torch.cat([y, y], dim=0)
             y = torch.cat([y, y], dim=0)
 
-        X_cntxt, Y_cntxt, X_trgt, Y_trgt = get_cntxt_trgt(X, y)
-
+        X_cntxt, Y_cntxt, X_trgt, Y_trgt = get_cntxt_trgt(X, y, **kwargs)
         inputs = dict(X_cntxt=X_cntxt, Y_cntxt=Y_cntxt, X_trgt=X_trgt, Y_trgt=Y_trgt)
         targets = Y_trgt
 

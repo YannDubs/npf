@@ -19,7 +19,7 @@ def channels_to_2nd_dim(X):
     return X.permute(*([0, X.dim() - 1] + list(range(1, X.dim() - 1))))
 
 
-def channel_to_last_dim(X):
+def channels_to_last_dim(X):
     """
     Takes a signal with channels on the second dimension (for convolutions) and
     returns it with channels on the last dimension (for most operations).

@@ -16,6 +16,7 @@ __all__ = ["train_models"]
 def train_models(datasets, models, criterion,
                  chckpnt_dirname=None,
                  is_retrain=False,
+                 runs=1,
                  train_split=skorch.dataset.CVSplit(0.1),
                  device=None,
                  max_epochs=100,
@@ -25,6 +26,8 @@ def train_models(datasets, models, criterion,
                  callbacks=[ProgressBar()],
                  patience=None,
                  seed=None,
+                 datasets_kwargs=dict(),
+                 models_kwargs=dict(),
                  **kwargs
                  ):
     """
@@ -51,6 +54,11 @@ def train_models(datasets, models, criterion,
     is_retrain : bool, optional
         Whether to retrain the model. If not, `chckpnt_dirname` should be given
         to load the pretrained model.
+
+    runs : int, optional
+        How many times to run the model. Each run will be saved in
+        `chckpnt_dirname/run_{}`. If a seed is give, it will be incremented at
+        each run.
 
     train_split : callable, optional
         If None, there is no train/validation split. Else, train_split
@@ -87,6 +95,12 @@ def train_models(datasets, models, criterion,
         Pseudo random seed to force deterministic results (on CUDA might still
         differ a little).
 
+    datasets_kwargs : dict, optional
+        Dictionary of datasets specfifc kwargs.
+
+    models_kwargs : dict, optional
+        Dictionary of model specfifc kwargs.
+
     kwargs :
         Additional arguments to `NeuralNet`.
 
@@ -115,58 +129,65 @@ def train_models(datasets, models, criterion,
 
         for model_name, model in current_models.items():
 
-            callbacks = deepcopy(callbacks_dflt)
+            for run in range(runs):
 
-            if isinstance(data_train, tuple):
-                data_train, data_valid = data_train
-                train_split = predefined_split(data_valid)
+                callbacks = deepcopy(callbacks_dflt)
 
-            suffix = data_name + "/" + model_name
+                if isinstance(data_train, tuple):
+                    data_train, data_valid = data_train
+                    train_split = predefined_split(data_valid)
 
-            print("\n--- {} {} ---\n".format("Training" if is_retrain else "Loading", suffix))
+                suffix = data_name + "/" + model_name + "/run_{}".format(run)
 
-            if chckpnt_dirname is not None:
-                chckpt = Checkpoint(dirname=chckpnt_dirname + suffix,
-                                    monitor='valid_loss_best')
-                callbacks.append(chckpt)
+                print("\n--- {} {} ---\n".format("Training" if is_retrain else "Loading", suffix))
 
-            if patience is not None:
-                callbacks.append(EarlyStopping(patience=patience))
+                if chckpnt_dirname is not None:
+                    chckpt = Checkpoint(dirname=chckpnt_dirname + suffix,
+                                        monitor='valid_loss_best')
+                    callbacks.append(chckpt)
 
-            if seed is not None:
-                callbacks.append(FixRandomSeed(seed))
+                if patience is not None:
+                    callbacks.append(EarlyStopping(patience=patience))
 
-            model = NeuralNet(model, criterion,
-                              train_split=train_split,
-                              warm_start=True,  # continue training
-                              callbacks=callbacks,
-                              device=device,
-                              optimizer=optimizer,
-                              lr=lr,
-                              max_epochs=max_epochs,
-                              batch_size=batch_size,
-                              **kwargs)
+                if seed is not None:
+                    # make sure that the seed changes acrosss runs
+                    callbacks.append(FixRandomSeed(seed + run))
 
-            if is_retrain:
-                _ = model.fit(data_train)
+                kwargs.update(dict(train_split=train_split,
+                                   warm_start=True,  # continue training
+                                   callbacks=callbacks,
+                                   device=device,
+                                   optimizer=optimizer,
+                                   lr=lr,
+                                   max_epochs=max_epochs,
+                                   batch_size=batch_size))
 
-            # load in all case => even when training loads the best checkpoint
-            model.initialize()
-            model.load_params(checkpoint=chckpt)
+                current_kwargs = kwargs.copy()
+                current_kwargs.update(datasets_kwargs.get(data_name, dict()))
+                current_kwargs.update(models_kwargs.get(model_name, dict()))
 
-            model.module_.cpu()  # make sure on cpu
-            torch.cuda.empty_cache()  # empty cache for next run
+                model = NeuralNet(model, criterion, **current_kwargs)
 
-            trainers[suffix] = model
+                if is_retrain:
+                    _ = model.fit(data_train)
 
-            # print best loss
-            try:
-                for epoch, history in enumerate(model.history[::-1]):
-                    if history["valid_loss_best"]:
-                        print(suffix, "best epoch:", len(model.history) - epoch,
-                              "val_loss:", history["valid_loss"])
-                        break
-            except:
-                pass
+                # load in all case => even when training loads the best checkpoint
+                model.initialize()
+                model.load_params(checkpoint=chckpt)
+
+                model.module_.cpu()  # make sure on cpu
+                torch.cuda.empty_cache()  # empty cache for next run
+
+                trainers[suffix] = model
+
+                # print best loss
+                try:
+                    for epoch, history in enumerate(model.history[::-1]):
+                        if history["valid_loss_best"]:
+                            print(suffix, "best epoch:", len(model.history) - epoch,
+                                  "val_loss:", history["valid_loss"])
+                            break
+                except:
+                    pass
 
     return trainers
