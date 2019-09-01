@@ -13,6 +13,9 @@ class NeuralProcessLoss(nn.Module):
     get_beta : callable, optional
         Function which returns the weight of the kl divergence given `is_training`.
 
+    is_return_all : bool, optional
+        Wheter to return the NLL for each example rather than average.
+
     References
     ----------
     [1] Garnelo, Marta, et al. "Neural processes." arXiv preprint
@@ -20,9 +23,10 @@ class NeuralProcessLoss(nn.Module):
     [Jonathan]
     """
 
-    def __init__(self, get_beta=lambda _: 1):
+    def __init__(self, get_beta=lambda _: 1, is_return_all=False):
         super().__init__()
         self.get_beta = get_beta
+        self.is_return_all = is_return_all
 
     def forward(self, pred_outputs, Y_trgt, weight=None):
         """Compute the Neural Process Loss averaged over the batch.
@@ -56,5 +60,8 @@ class NeuralProcessLoss(nn.Module):
 
         if weight is not None:
             loss = loss * weight
+
+        if self.is_return_all:
+            return loss
 
         return loss.mean(dim=0)

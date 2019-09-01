@@ -68,7 +68,7 @@ def get_models(model_names):
                                         XYEncoder=merge_flat_input(SelfAttention,
                                                                    is_sum_merge=True))
         # use smaller batch size because memory ++
-        models_kwargs["SelfAttnCNP"] = dict(batch_size=8)
+        models_kwargs["SelfAttnCNP"] = dict(batch_size=16)
 
     # work directly with masks
     masked_collate = cntxt_trgt_collate(GET_CNTXT_TRGT, is_return_masks=True)
@@ -112,7 +112,8 @@ def get_models(model_names):
                                             is_return_masks=True,
                                             is_repeat_batch=True)
         models_kwargs["GridedSharedUnetCCP"] = dict(iterator_train__collate_fn=repeat_collate,
-                                                    iterator_valid__collate_fn=repeat_collate,
+                                                    # don't repeat when eval
+                                                    iterator_valid__collate_fn=masked_collate,
                                                     # like that actually same batch size
                                                     batch_size=32)
 

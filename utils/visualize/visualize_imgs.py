@@ -6,6 +6,7 @@ from torchvision.utils import make_grid
 
 from neuralproc.utils.helpers import prod, channels_to_2nd_dim
 from utils.data import cntxt_trgt_collate
+from utils.predict import VanillaPredictor
 from .visualize_1d import _get_p_y_pred
 
 __all__ = ["plot_dataset_samples_imgs", "plot_posterior_img"]
@@ -30,6 +31,7 @@ def plot_dataset_samples_imgs(dataset, n_plots=4, figsize=DFLT_FIGSIZE, ax=None,
 
 
 def plot_posterior_img(data, get_cntxt_trgt, model,
+                       MeanPredictor=VanillaPredictor,
                        is_uniform_grid=True,
                        n_plots=4,
                        figsize=(18, 4),
@@ -46,12 +48,18 @@ def plot_posterior_img(data, get_cntxt_trgt, model,
         Function that takes as input the features and tagrets `X`, `y` and return
         the corresponding `X_cntxt, Y_cntxt, X_trgt, Y_trgt`.
 
+    model : nn.Module
+        Model used to initialize `MeanPredictor`.
+
+    MeanPredictor : untitialized callable, optional
+        Callable which is initalized with `MeanPredictor(model)` and then takes as
+        input `X_cntxt, Y_cntxt, X_trgt` (`mask_cntxt, X, mask_trgt` if
+        `is_uniform_grid`) and returns the mean the posterior. E.g. `VanillaPredictor`
+        or `AutoregressivePredictor`.
+
     is_uniform_grid : bool, optional
         Whether the input are the image and corresponding masks rather than
         the slected pixels. Typically used for `RegularGridsConvolutionalProcess`.
-
-    model : nn.Module
-        Model to use for predictions.
 
     n_plots : int, optional
         Number of images to samples. They will be plotted in different columns.
@@ -68,8 +76,7 @@ def plot_posterior_img(data, get_cntxt_trgt, model,
     cntxt_trgt = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=is_uniform_grid)(imgs)[0]
     mask_cntxt, X, mask_trgt, _ = (cntxt_trgt["X_cntxt"], cntxt_trgt["Y_cntxt"],
                                    cntxt_trgt["X_trgt"], cntxt_trgt["Y_trgt"])
-    p_y_pred, *_ = model(mask_cntxt, X, mask_trgt)
-    mean_y = p_y_pred.base_dist.loc.detach()
+    mean_y = MeanPredictor(model)(mask_cntxt, X, mask_trgt)
 
     if is_uniform_grid:
         mean_y = mean_y.view(*X.shape)
