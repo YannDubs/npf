@@ -1,22 +1,28 @@
 import random
+import os
 
 import matplotlib.pyplot as plt
 import torch
 from torchvision.utils import make_grid
+import numpy as np
 
 from neuralproc.utils.helpers import prod, channels_to_2nd_dim
+from neuralproc.utils.predict import VanillaPredictor
 from utils.data import cntxt_trgt_collate
-from utils.predict import VanillaPredictor
+from utils.helpers import set_seed
+from utils.train import EVAL_FILENAME
 from .visualize_1d import _get_p_y_pred
 
-__all__ = ["plot_dataset_samples_imgs", "plot_posterior_img"]
+__all__ = ["plot_dataset_samples_imgs", "plot_posterior_img", "plot_qualitative_with_kde"]
 
 DFLT_FIGSIZE = (17, 9)
 
 
 def plot_dataset_samples_imgs(dataset, n_plots=4, figsize=DFLT_FIGSIZE, ax=None,
-                              pad_value=1):
+                              pad_value=1, seed=123):
     """Plot `n_samples` samples of the a datset."""
+    set_seed(seed)
+
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -30,12 +36,18 @@ def plot_dataset_samples_imgs(dataset, n_plots=4, figsize=DFLT_FIGSIZE, ax=None,
     ax.axis('off')
 
 
+import seaborn as sns
+
+
 def plot_posterior_img(data, get_cntxt_trgt, model,
                        MeanPredictor=VanillaPredictor,
                        is_uniform_grid=True,
+                       img_indcs=None,
                        n_plots=4,
                        figsize=(18, 4),
-                       ax=None):
+                       ax=None,
+                       seed=123,
+                       is_return=False):  # TO DOC
     """
     Plot the mean of the estimated posterior for images.
 
@@ -61,18 +73,30 @@ def plot_posterior_img(data, get_cntxt_trgt, model,
         Whether the input are the image and corresponding masks rather than
         the slected pixels. Typically used for `RegularGridsConvolutionalProcess`.
 
+    img_indcs : list of int, optional
+        Indices of the images to plot. If `None` will randomly sample `n_plots`
+        of them.
+
     n_plots : int, optional
         Number of images to samples. They will be plotted in different columns.
+        Only used if `img_indcs` is `None`.
 
     figsize : tuple, optional
 
     ax : plt.axes.Axes, optional
+
+    seed : int, optional
     """
+    set_seed(seed)
 
     model.eval()
 
+    if img_indcs is None:
+        img_indcs = [random.randint(0, len(data)) for _ in range(n_plots)]
+    n_plots = len(img_indcs)
+    imgs = [data[i] for i in img_indcs]
+
     dim_grid = 2 if is_uniform_grid else 1
-    imgs = [data[random.randint(0, len(data))] for _ in range(n_plots)]
     cntxt_trgt = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=is_uniform_grid)(imgs)[0]
     mask_cntxt, X, mask_trgt, _ = (cntxt_trgt["X_cntxt"], cntxt_trgt["Y_cntxt"],
                                    cntxt_trgt["X_trgt"], cntxt_trgt["Y_trgt"])
@@ -110,13 +134,74 @@ def plot_posterior_img(data, get_cntxt_trgt, model,
                      nrow=n_plots,
                      pad_value=1.)
 
+    if is_return:
+        return grid
+
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
     ax.imshow(grid.permute(1, 2, 0).numpy(), )
     ax.axis('off')
 
-    return grid
+
+def plot_qualitative_with_kde(trainers, data, get_cntxt_trgt,
+                              percentiles=[1, 50, 99],
+                              figsize=DFLT_FIGSIZE,
+                              title=None,
+                              **kwargs):
+    """
+    Plot qualitative samples using `plot_posterior_img` but select the samples
+    to plot by a given percentile. I.e. for 50% it plots the closest test image
+    to the median error.
+    """
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    img_indcs = []
+
+    for name, trainer in trainers.items():
+        chckpnt_dirname = dict(trainer.callbacks_)['Checkpoint'].dirname
+        test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
+        test_loglike = np.loadtxt(test_eval_file, delimiter=",")
+        sns.kdeplot(test_loglike, ax=ax, shade=True, label=name)
+        sns.despine()
+
+        for i, p in enumerate(percentiles):
+            # value closest to percentile
+            percentile_val = np.percentile(test_loglike, p, interpolation='nearest')
+            img_indcs.append(np.argwhere(test_loglike == percentile_val).item())
+            axvline_kwargs = dict()
+            if i == 0:
+                axvline_kwargs["label"] = "{} {}-Percentiles".format(name, set(percentiles))
+
+            ax.axvline(percentile_val, linestyle=":",
+                       alpha=0.5,
+                       c=vars(ax.get_lines()[-1])['_color'],  # use same color as kde_plot
+                       **axvline_kwargs)
+
+    ax.legend()
+
+    if title is not None:
+        ax.set_title(title, fontsize=18)
+
+    # ---- TMP : USE BETTER WAY OF DOING -----
+    fig, ax = plt.subplots(figsize=(figsize[0], figsize[0]))
+
+    grids = []
+    for name, trainer in trainers.items():
+        grids.append(plot_posterior_img(data, get_cntxt_trgt, trainer.module_,
+                                        img_indcs=img_indcs,
+                                        is_uniform_grid="grided" in name.lower(),  # use a better way # DEV MODE
+                                        is_return=True,
+                                        **kwargs))
+
+    if len(grids) > 1:
+        grid = torch.cat((grids[0], grids[1][:, 36:, :]), dim=1)
+    else:
+        grid = grids[0]
+
+    ax.imshow(grid.permute(1, 2, 0).numpy())
+    ax.axis('off')
+    # ----------------------------------------
 
 
 def idcs_grid_to_idcs_flatten(idcs, grid_shape):

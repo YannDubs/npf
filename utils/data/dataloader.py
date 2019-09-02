@@ -4,7 +4,7 @@ __all__ = ["cntxt_trgt_collate"]
 
 
 def cntxt_trgt_collate(get_cntxt_trgt,
-                       is_repeat_batch=False,
+                       is_duplicate_batch=False,
                        **kwargs):
     """Transformes and collates inputs to neural processes given the whole input.
 
@@ -14,7 +14,7 @@ def cntxt_trgt_collate(get_cntxt_trgt,
         Function that takes as input the features and tagrets `X`, `y` and return
         the corresponding `X_cntxt, Y_cntxt, X_trgt, Y_trgt`.
 
-    is_repeat_batch : bool, optional
+    is_duplicate_batch : bool, optional
         Wether to repeat the batch to have 2 diffeerent context and target sets
         for every function. If so the batch will contain the concatenation of both.
     """
@@ -24,7 +24,7 @@ def cntxt_trgt_collate(get_cntxt_trgt,
         X = collated[0]
         y = collated[1]
 
-        if is_repeat_batch:
+        if is_duplicate_batch:
             X = torch.cat([X, X], dim=0)
             if y is not None:
                 y = torch.cat([y, y], dim=0)

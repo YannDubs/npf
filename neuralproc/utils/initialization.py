@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+__all__ = ["weights_init"]
 
 def weights_init(module, **kwargs):
     """Initialize a module and all its descendents.

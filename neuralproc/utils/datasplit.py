@@ -6,6 +6,9 @@ import numpy as np
 
 from .helpers import ratio_to_int, prod, indep_shuffle_, channels_to_last_dim
 
+__all__ = ["get_all_indcs", "GetRangeIndcs", "GetRandomIndcs", "CntxtTrgtGetter",
+           "RandomMasker", "half_masker", "no_masker", "GridCntxtTrgtGetter"]
+
 
 ### INDICES SELECTORS ###
 def get_all_indcs(batch_size, n_possible_points):
@@ -52,7 +55,7 @@ class GetRandomIndcs:
         Maximum number of indices. If smaller than 1, represents a percentage of
         points.
 
-    is_batch_repeat : bool, optional
+    is_batch_share : bool, optional
         Whether to use use the same indices for all elements in the batch.
 
     range_indcs : tuple, optional
@@ -62,11 +65,11 @@ class GetRandomIndcs:
     def __init__(self,
                  min_n_indcs=.1,
                  max_n_indcs=.5,
-                 is_batch_repeat=False,
+                 is_batch_share=False,
                  range_indcs=None):
         self.min_n_indcs = min_n_indcs
         self.max_n_indcs = max_n_indcs
-        self.is_batch_repeat = is_batch_repeat
+        self.is_batch_share = is_batch_share
         self.range_indcs = range_indcs
 
     def __call__(self, batch_size, n_possible_points):
@@ -78,7 +81,7 @@ class GetRandomIndcs:
         # make sure select at least 1
         n_indcs = random.randint(max(1, min_n_indcs), max(1, max_n_indcs))
 
-        if self.is_batch_repeat:
+        if self.is_batch_share:
             indcs = torch.randperm(n_possible_points)[:n_indcs]
             indcs = indcs.unsqueeze(0).expand(batch_size, n_indcs)
         else:
@@ -204,23 +207,23 @@ class RandomMasker(GetRandomIndcs):
         Maximum number of non zero values. If smaller than 1, represents a
         percentage of points.
 
-    is_batch_repeat : bool, optional
+    is_batch_share : bool, optional
         Whether to use use the same indices for all elements in the batch.
     """
 
     def __init__(self,
                  min_nnz=.1,
                  max_nnz=.5,
-                 is_batch_repeat=False):
+                 is_batch_share=False):
         super().__init__(min_n_indcs=min_nnz,
                          max_n_indcs=max_nnz,
-                         is_batch_repeat=is_batch_repeat)
+                         is_batch_share=is_batch_share)
 
     def __call__(self, batch_size, mask_shape, **kwargs):
         n_possible_points = prod(mask_shape)
         nnz_indcs = super().__call__(batch_size, n_possible_points, **kwargs)
 
-        if self.is_batch_repeat:
+        if self.is_batch_share:
             # share memory
             mask = torch.zeros(n_possible_points).byte()
             mask = mask.unsqueeze(0).expand(batch_size, n_possible_points)

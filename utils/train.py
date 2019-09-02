@@ -1,5 +1,8 @@
 from copy import deepcopy
+import os
+import warnings
 
+import numpy as np
 import torch
 from torch.optim import Adam
 
@@ -9,11 +12,15 @@ from skorch.callbacks import ProgressBar, Checkpoint, EarlyStopping
 from skorch.helper import predefined_split
 
 from .helpers import FixRandomSeed
+from .evaluate import eval_loglike
 
 __all__ = ["train_models"]
 
+EVAL_FILENAME = "eval.csv"
+
 
 def train_models(datasets, models, criterion,
+                 test_datasets=dict(),
                  chckpnt_dirname=None,
                  is_retrain=False,
                  runs=1,
@@ -47,6 +54,11 @@ def train_models(datasets, models, criterion,
 
     criterion : nn.Module
         The uninitialized criterion (loss).
+
+    test_datasets : dict, optional
+        The test datasets. If given, the corresponding models will be evaluated
+        on those, the log likelihood for each datapoint will be saved in the
+        in the checkpoint directory as `eval.csv`.
 
     chckpnt_dirname : str, optional
         Directory where checkpoints will be saved.
@@ -107,6 +119,7 @@ def train_models(datasets, models, criterion,
     """
     trainers = dict()
     callbacks_dflt = callbacks
+    init_chckpnt_dirname = chckpnt_dirname
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -127,6 +140,8 @@ def train_models(datasets, models, criterion,
         else:
             current_models = models
 
+        data_test = test_datasets.get(data_name, None)
+
         for model_name, model in current_models.items():
 
             for run in range(runs):
@@ -142,7 +157,9 @@ def train_models(datasets, models, criterion,
                 print("\n--- {} {} ---\n".format("Training" if is_retrain else "Loading", suffix))
 
                 if chckpnt_dirname is not None:
-                    chckpt = Checkpoint(dirname=chckpnt_dirname + suffix,
+                    chckpnt_dirname = init_chckpnt_dirname + suffix
+                    test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
+                    chckpt = Checkpoint(dirname=chckpnt_dirname,
                                         monitor='valid_loss_best')
                     callbacks.append(chckpt)
 
@@ -175,19 +192,54 @@ def train_models(datasets, models, criterion,
                 model.initialize()
                 model.load_params(checkpoint=chckpt)
 
+                test_loglike = _eval_save_load(model, data_test, test_eval_file,
+                                               is_force_rerun=is_retrain)
+                valid_loss, best_epoch = _best_loss(model, suffix, mode="valid")
+                train_loss, _ = _best_loss(model, suffix, mode="train")
+
+                print(suffix,
+                      "| best epoch:", best_epoch,
+                      "| train loss:", round_decimals(train_loss, n=4),
+                      "| valid loss:", round_decimals(valid_loss, n=4),
+                      "| test log likelihood:", round_decimals(test_loglike, n=4))
+
                 model.module_.cpu()  # make sure on cpu
                 torch.cuda.empty_cache()  # empty cache for next run
 
                 trainers[suffix] = model
 
-                # print best loss
-                try:
-                    for epoch, history in enumerate(model.history[::-1]):
-                        if history["valid_loss_best"]:
-                            print(suffix, "best epoch:", len(model.history) - epoch,
-                                  "val_loss:", history["valid_loss"])
-                            break
-                except:
-                    pass
-
     return trainers
+
+
+def round_decimals(x, n=4):
+    if x is not None:
+        pattern = "{:." + str(n) + "f}"
+        x = float(pattern.format(x))
+    return x
+
+
+def _eval_save_load(model, data_test, test_eval_file, is_force_rerun=False):
+    test_loglike = None
+
+    if data_test is not None:
+
+        if test_eval_file is not None and os.path.exists(test_eval_file):
+            test_loglike = np.loadtxt(test_eval_file, delimiter=",")
+
+        if is_force_rerun or test_loglike is None:
+            test_loglike = eval_loglike(model, data_test)
+
+        if test_eval_file is not None:
+            np.savetxt(test_eval_file, test_loglike, delimiter=",")
+
+        return test_loglike.mean(axis=0)
+
+
+def _best_loss(model, suffix, mode="valid"):
+    try:
+        for epoch, history in enumerate(model.history[::-1]):
+            if history["{}_loss_best".format(mode)]:
+                best_epoch = len(model.history) - epoch
+                return history["{}_loss".format(mode)], best_epoch
+    except:
+        return None, None
