@@ -24,6 +24,7 @@ def train_models(datasets, models, criterion,
                  chckpnt_dirname=None,
                  is_retrain=False,
                  runs=1,
+                 starting_run=0,
                  train_split=skorch.dataset.CVSplit(0.1),
                  device=None,
                  max_epochs=100,
@@ -71,6 +72,10 @@ def train_models(datasets, models, criterion,
         How many times to run the model. Each run will be saved in
         `chckpnt_dirname/run_{}`. If a seed is give, it will be incremented at
         each run.
+
+    starting_run : int, optional
+        Starting run. This is useful if a couple of runs have already been trained,
+        and you want to continue from there.
 
     train_split : callable, optional
         If None, there is no train/validation split. Else, train_split
@@ -144,7 +149,7 @@ def train_models(datasets, models, criterion,
 
         for model_name, model in current_models.items():
 
-            for run in range(runs):
+            for run in range(starting_run, starting_run + runs):
 
                 callbacks = deepcopy(callbacks_dflt)
 

@@ -14,6 +14,8 @@ import argparse
 import torch
 import skorch
 from skorch.callbacks import ProgressBar
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 from neuralproc import RegularGridsConvolutionalProcess, AttentiveNeuralProcess, NeuralProcessLoss
@@ -35,8 +37,8 @@ MODELS_KWARGS = dict(r_dim=128,
                      # make sure output is in 0,1 as images preprocessed so
                      pred_loc_transformer=lambda mu: torch.sigmoid(mu))
 CNN_KWARGS = dict(ConvBlock=ResConvBlock,
-                  Conv=torch.nn.Conv2d,
-                  Normalization=torch.nn.BatchNorm2d,  # ??
+                  Conv=nn.Conv2d,
+                  Normalization=nn.BatchNorm2d,  # ??
                   is_chan_last=True,
                   kernel_size=11)
 GET_CNTXT_TRGT = GridCntxtTrgtGetter(context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
@@ -51,7 +53,7 @@ def add_y_dim(models, datasets):
             for data_name, data_train in datasets.items()}
 
 
-def get_models(model_names):
+def get_models(model_names, **kwargs):
     models = dict()
     models_kwargs = dict()
 
@@ -59,8 +61,9 @@ def get_models(model_names):
         models["AttnCNP"] = partial(AttentiveNeuralProcess,
                                     x_dim=X_DIM,
                                     attention="transformer",
-                                    **MODELS_KWARGS)
-        models_kwargs["AttnCNP"] = dict(batch_size=32)
+                                    **MODELS_KWARGS,
+                                    **kwargs)
+        #models_kwargs["AttnCNP"] = dict(batch_size=32)
 
     if "SelfAttnCNP" in model_names:
         AttnCNP = get_models(["AttnCNP"])[0]["AttnCNP"]
@@ -68,7 +71,7 @@ def get_models(model_names):
                                         XYEncoder=merge_flat_input(SelfAttention,
                                                                    is_sum_merge=True))
         # use smaller batch size because memory ++
-        models_kwargs["SelfAttnCNP"] = dict(batch_size=16)
+        #models_kwargs["SelfAttnCNP"] = dict(batch_size=16)
 
     # work directly with masks
     masked_collate = cntxt_trgt_collate(GET_CNTXT_TRGT, is_return_masks=True)
@@ -78,7 +81,8 @@ def get_models(model_names):
                                       x_dim=X_DIM,
                                       # depth separable resnet
                                       PseudoTransformer=partial(CNN, n_blocks=7, **CNN_KWARGS),
-                                      **MODELS_KWARGS)
+                                      **MODELS_KWARGS,
+                                      **kwargs)
 
         models_kwargs["GridedCCP"] = dict(iterator_train__collate_fn=masked_collate,
                                           iterator_valid__collate_fn=masked_collate)
@@ -88,14 +92,16 @@ def get_models(model_names):
                                        upsample_mode="bilinear",
                                        max_nchannels=64,  # use constant number of channels and chosen to have similar # param
                                        n_blocks=9,
-                                       **CNN_KWARGS)
+                                       **CNN_KWARGS,
+                                       **kwargs)
 
     if "GridedUnetCCP" in model_names:
         models["GridedUnetCCP"] = partial(RegularGridsConvolutionalProcess,
                                           x_dim=X_DIM,
                                           # Unet CNN with depth separable resnet blocks
                                           PseudoTransformer=PseudoTransformerUnetCNN,
-                                          **MODELS_KWARGS)
+                                          **MODELS_KWARGS,
+                                          **kwargs)
         models_kwargs["GridedUnetCCP"] = dict(iterator_train__collate_fn=masked_collate,
                                               iterator_valid__collate_fn=masked_collate)
 
@@ -105,7 +111,8 @@ def get_models(model_names):
                                                 # Unet CNN with depth separable resnet blocks
                                                 PseudoTransformer=partial(PseudoTransformerUnetCNN,
                                                                           is_force_same_bottleneck=True),
-                                                **MODELS_KWARGS)
+                                                **MODELS_KWARGS,
+                                                **kwargs)
 
         # repreat the batch twice => every function has 2 different cntxt and trgt samples
         repeat_collate = cntxt_trgt_collate(GET_CNTXT_TRGT,
@@ -158,20 +165,34 @@ def train(models, train_datasets, **kwargs):
                      iterator_train__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
                      iterator_valid__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
                      patience=10,
-                     batch_size=64,
                      seed=123,
                      **kwargs)
 
 
 def main(args):
-    print(args)
+
+    # DATA
     train_datasets, test_datasets, datasets_kwargs = get_datasets(args.datasets)
-    models, models_kwargs = get_models(args.models)
+
+    # MODELS
+    if args.no_batchnorm:
+        CNN_KWARGS["Normalization"] = nn.Identity
+    pred_scale_transformer = lambda scale_trgt: args.min_sigma + (1 - args.min_sigma
+                                                                  ) * F.softplus(scale_trgt)
+    models, models_kwargs = get_models(args.models,
+                                       pred_scale_transformer=pred_scale_transformer)
+
+    # TRAINING
     callbacks = [ProgressBar()] if args.is_progressbar else []
     train(models, train_datasets,
           datasets_kwargs=datasets_kwargs,
           models_kwargs=models_kwargs,
-          callbacks=callbacks)
+          callbacks=callbacks,
+          runs=args.runs,
+          starting_run=args.starting_run,
+          max_epochs=args.max_epochs,
+          lr=args.lr,
+          batch_size=args.batch_size)
 
 
 def parse_arguments(args_to_parse):
@@ -189,10 +210,33 @@ def parse_arguments(args_to_parse):
                         choices=['AttnCNP', 'SelfAttnCNP', 'GridedCCP',
                                  'GridedUnetCCP', 'GridedSharedUnetCCP'],
                         required=True)
+    parser.add_argument('-l', "--lr",
+                        default=1e-3,
+                        type=float,
+                        help='Learning rate.')
+    parser.add_argument('-e', "--max-epochs",
+                        default=100,
+                        type=int,
+                        help='Max number of epochs.')
+    parser.add_argument('-b', "--batch-size",
+                        default=64,
+                        type=int,
+                        help='Batch size.')
     parser.add_argument('-r', '--runs',
                         default=1,
                         type=int,
                         help='Number of runs.')
+    parser.add_argument('--starting-run',
+                        default=0,
+                        type=int,
+                        help='Starting run. This is useful if a couple of runs have already been trained, and you want to continue from there.')
+    parser.add_argument('--min-sigma',
+                        default=0.1,
+                        type=float,
+                        help='Lowest bound on the std that the model can predict.')
+    parser.add_argument('--no-batchnorm',
+                        action='store_true',
+                        help='Whether to remove batchnorm when training CCP.')
     parser.add_argument('--is-progressbar',
                         action='store_true',
                         help='Whether to use a progressbar.')
