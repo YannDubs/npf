@@ -148,7 +148,7 @@ class NeuralProcess(nn.Module):
                  n_autoregressive_steps=0
                  ):
         super().__init__()
-
+        print(n_autoregressive_steps)
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
                                                                         XYEncoder,
                                                                         x_transf_dim,

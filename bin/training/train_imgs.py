@@ -71,8 +71,7 @@ def get_models(model_names, **kwargs):
                                         XYEncoder=merge_flat_input(SelfAttention,
                                                                    is_sum_merge=True))
         # use smaller batch size because memory ++
-        models_kwargs["SelfAttnCNP"] = dict(batch_size=16)
-        models_kwargs["SelfAttnCNP"] = dict(lr=5e-4)
+        models_kwargs["SelfAttnCNP"] = dict(batch_size=16, lr=5e-4)
 
     # work directly with masks
     masked_collate = cntxt_trgt_collate(GET_CNTXT_TRGT, is_return_masks=True)
