@@ -150,7 +150,151 @@ class MNIST(datasets.MNIST):
         self.targets = to_numpy(self.targets)
 
 
+# GENERATED DATASETS
+class ZeroShotMultiMNIST(Dataset):
+    """ZeroShotMultiMNIST dataset. The test set consists of multiple digits (by default 2).
+    The training set consists of mnist digits with added black borders such that the image
+    size is the same as in the test set, but the digits are of the same scale.
+
+    Parameters
+    ----------
+    root : string
+        Root directory of dataset.
+
+    transforms_list : list
+        List of `torch.vision.transforms` to apply to the data when loading it.
+
+    split : {'train', 'test'}, optional
+        According dataset is selected.
+
+    n_test_digits : int, optional
+        Number of digits per test image.
+
+    final_size : int, optional
+        Final size of the images (square of that shape). If `None` uses `n_test_digits*2`.
+
+    seed : int, optional
+
+    logger : logging.Logger
+
+    kwargs:
+        Additional arguments to the dataset data generation process `make_multi_mnist_*`.
+    """
+    background_color = COLOUR_BLACK
+    n_classes = 0
+    shape = (1, 56, 56)
+    files = {"train": "train",
+             "test": "test"}
+
+    def __init__(self,
+                 root=os.path.join(DIR, '../../data/ZeroShotMultiMNIST'),
+                 transforms_list=[],
+                 split="train",
+                 n_test_digits=2,
+                 final_size=None,
+                 seed=123,
+                 logger=logging.getLogger(__name__),
+                 **kwargs):
+
+        self.root = root
+        self.transforms = transforms.Compose(transforms_list)
+        self.logger = logger
+        self.n_test_digits = n_test_digits
+        self.seed = seed
+        self.final_size = final_size
+        self._init_size = 28
+
+        saved_data = os.path.join(root, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits))
+
+        try:
+            self.data = torch.load(saved_data)
+        except FileNotFoundError:
+            if not os.path.exists:
+                os.mkdir(root)
+            mnist = datasets.MNIST(root=os.path.join(self.root, os.path.pardir),
+                                   train=split == "train",
+                                   download=True)
+            self.logger.info("Generating ZeroShotMultiMNIST {} split.".format(split))
+            if split == "train":
+                self.data = self.make_multi_mnist_train(mnist.data, **kwargs)
+            elif split == "test":
+                self.data = self.make_multi_mnist_test(mnist.data, **kwargs)
+            torch.save(self.data, saved_data)
+            self.logger.info("Finished Generating.")
+
+        self.logger.info("Resizing ZeroShotMultiMNIST ...")
+
+        if self.final_size is not None:
+            self.data = torch.nn.functional.interpolate(self.data.unsqueeze(1).float(),
+                                                        size=self.final_size, mode='bilinear',
+                                                        align_corners=True).squeeze(1)
+
+    def make_multi_mnist_train(self, train_dataset):
+        """Train set of multi mnist by taking mnist and adding borders to be the correct scale."""
+        set_seed(self.seed)
+        fin_img_size = self._init_size * self.n_test_digits
+        init_img_size = train_dataset.shape[1:]
+        background = np.zeros((train_dataset.size(0), fin_img_size, fin_img_size)).astype(np.uint8)
+        borders = (np.array((fin_img_size, fin_img_size)) - init_img_size) // 2
+        background[:, borders[0]:-borders[0], borders[1]:-borders[1]] = train_dataset
+        return torch.from_numpy(background)
+
+    def make_multi_mnist_test(self, test_dataset, varying_axis=None):
+        """
+        Test set of multi mnist by concatenating moving digits around `varying_axis`
+        (both axis if `None`) and concatenating them over the other.
+        """
+        set_seed(self.seed)
+
+        n_test = test_dataset.size(0)
+
+        if varying_axis is None:
+            out_axis0 = self.make_multi_mnist_test(test_dataset[:n_test // 2], varying_axis=0)
+            out_axis1 = self.make_multi_mnist_test(test_dataset[:n_test // 2], varying_axis=1)
+            return torch.cat((out_axis0, out_axis1), dim=0)[torch.randperm(n_test)]
+
+        fin_img_size = self._init_size * self.n_test_digits
+        n_tmp = self.n_test_digits * n_test
+        init_img_size = test_dataset.shape[1:]
+
+        tmp_img_size = list(test_dataset.shape[1:])
+        tmp_img_size[varying_axis] = fin_img_size
+        tmp_background = torch.from_numpy(np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8))
+
+        max_shift = fin_img_size - init_img_size[varying_axis]
+        shifts = np.random.randint(max_shift, size=n_tmp)
+
+        test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[torch.randperm(n_tmp)]
+
+        for i, shift in enumerate(shifts):
+            slices = [slice(None), slice(None)]
+            slices[varying_axis] = slice(shift, shift + self._init_size)
+            tmp_background[i, slices[0], slices[1]] = test_dataset[i, ...]
+
+        out = torch.cat(tmp_background.split(n_test, 0), dim=1 + 1 - varying_axis)
+        return out
+
+    def __getitem__(self, idx):
+        """Get the image of `idx`
+
+        Return
+        ------
+        sample : torch.Tensor
+            Tensor in [0.,1.] of shape `shape`.
+
+        placeholder :
+            Placeholder value as their are no targets.
+        """
+        # put each pixel in [0.,1.] and reshape to (C x H x W)
+        img = self.transforms(self.data[idx]).unsqueeze(0)
+
+        # no label so return 0 (note that can't return None because)
+        # dataloaders requires so
+        return img, 0
+
 # EXTERNAL DATASETS
+
+
 class ExternalDataset(Dataset, abc.ABC):
     """Base Class for external datasets.
 
