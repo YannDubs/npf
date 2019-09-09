@@ -188,19 +188,19 @@ def train_models(datasets, models, criterion,
                 current_kwargs.update(datasets_kwargs.get(data_name, dict()))
                 current_kwargs.update(models_kwargs.get(model_name, dict()))
 
-                model = NeuralNet(model, criterion, **current_kwargs)
+                trainer = NeuralNet(model, criterion, **current_kwargs)
 
                 if is_retrain:
-                    _ = model.fit(data_train)
+                    _ = trainer.fit(data_train)
 
                 # load in all case => even when training loads the best checkpoint
-                model.initialize()
-                model.load_params(checkpoint=chckpt)
+                trainer.initialize()
+                trainer.load_params(checkpoint=chckpt)
 
-                test_loglike = _eval_save_load(model, data_test, test_eval_file,
+                test_loglike = _eval_save_load(trainer, data_test, test_eval_file,
                                                is_force_rerun=is_retrain)
-                valid_loss, best_epoch = _best_loss(model, suffix, mode="valid")
-                train_loss, _ = _best_loss(model, suffix, mode="train")
+                valid_loss, best_epoch = _best_loss(trainer, suffix, mode="valid")
+                train_loss, _ = _best_loss(trainer, suffix, mode="train")
 
                 print(suffix,
                       "| best epoch:", best_epoch,
@@ -208,10 +208,10 @@ def train_models(datasets, models, criterion,
                       "| valid loss:", round_decimals(valid_loss, n=4),
                       "| test log likelihood:", round_decimals(test_loglike, n=4))
 
-                model.module_.cpu()  # make sure on cpu
+                trainer.module_.cpu()  # make sure on cpu
                 torch.cuda.empty_cache()  # empty cache for next run
 
-                trainers[suffix] = model
+                trainers[suffix] = trainer
 
     return trainers
 

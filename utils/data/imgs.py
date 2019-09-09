@@ -10,11 +10,13 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from tqdm import tqdm
 import torch
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 
 from skorch.utils import to_numpy
 
+from utils.helpers import set_seed
 from .helpers import random_translation, preprocess
 
 DIR = os.path.abspath(os.path.dirname(__file__))
@@ -24,7 +26,8 @@ COLOUR_BLUE = torch.tensor([0., 0., 1.])
 DATASETS_DICT = {"mnist": "MNIST",
                  "svhn": "SVHN",
                  "celeba32": "CelebA32",
-                 "celeba64": "CelebA64"}
+                 "celeba64": "CelebA64",
+                 "zs-multi-mnist": "ZeroShotMultiMNIST"}
 DATASETS = list(DATASETS_DICT.keys())
 
 
@@ -223,11 +226,14 @@ class ZeroShotMultiMNIST(Dataset):
             self.logger.info("Finished Generating.")
 
         self.logger.info("Resizing ZeroShotMultiMNIST ...")
-
+        self.data = (self.data.float() / 255)
         if self.final_size is not None:
             self.data = torch.nn.functional.interpolate(self.data.unsqueeze(1).float(),
                                                         size=self.final_size, mode='bilinear',
                                                         align_corners=True).squeeze(1)
+
+    def __len__(self):
+        return self.data.size(0)
 
     def make_multi_mnist_train(self, train_dataset):
         """Train set of multi mnist by taking mnist and adding borders to be the correct scale."""
@@ -286,7 +292,7 @@ class ZeroShotMultiMNIST(Dataset):
             Placeholder value as their are no targets.
         """
         # put each pixel in [0.,1.] and reshape to (C x H x W)
-        img = self.transforms(self.data[idx]).unsqueeze(0)
+        img = self.transforms(self.data[idx]).unsqueeze(0).float()
 
         # no label so return 0 (note that can't return None because)
         # dataloaders requires so

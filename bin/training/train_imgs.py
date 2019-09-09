@@ -71,7 +71,7 @@ def get_models(model_names, **kwargs):
                                         XYEncoder=merge_flat_input(SelfAttention,
                                                                    is_sum_merge=True))
         # use smaller batch size because memory ++
-        models_kwargs["SelfAttnCNP"] = dict(batch_size=16, lr=5e-4)
+        models_kwargs["SelfAttnCNP"] = dict(batch_size=2, lr=5e-4)
 
     # work directly with masks
     masked_collate = cntxt_trgt_collate(GET_CNTXT_TRGT, is_return_masks=True)
@@ -144,6 +144,12 @@ def get_datasets(datasets):
         train_datasets["celeba64"] = celeba64_train
         test_datasets["celeba64"] = celeba64_test
 
+    if "zs-multi-mnist" in datasets:
+        zs_mmnist_train, zs_mmnist_test = train_dev_split(get_dataset("zs-multi-mnist")(),
+                                                          dev_size=0.1, is_stratify=False)
+        train_datasets["zs-multi-mnist"] = zs_mmnist_train
+        test_datasets["zs-multi-mnist"] = zs_mmnist_test
+
     if "svhn" in datasets:
         train_datasets["svhn"] = get_dataset("svhn")(split="train")
         test_datasets["svhn"] = get_dataset("svhn")(split="test")
@@ -185,6 +191,7 @@ def main(args):
     # TRAINING
     callbacks = [ProgressBar()] if args.is_progressbar else []
     train(models, train_datasets,
+          test_datasets=test_datasets,
           datasets_kwargs=datasets_kwargs,
           models_kwargs=models_kwargs,
           callbacks=callbacks,
@@ -201,7 +208,7 @@ def parse_arguments(args_to_parse):
                         nargs='+',
                         type=str,
                         help='Datasets.',
-                        choices=['celeba32', 'celeba64', 'svhn', 'mnist'],
+                        choices=['celeba32', 'celeba64', 'svhn', 'mnist', "zs-multi-mnist"],
                         required=True)
     parser.add_argument('-m', '--models',
                         nargs='+',
