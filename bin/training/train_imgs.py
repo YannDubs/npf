@@ -87,6 +87,26 @@ def get_models(model_names, **kwargs):
         models_kwargs["GridedCCP"] = dict(iterator_train__collate_fn=masked_collate,
                                           iterator_valid__collate_fn=masked_collate)
 
+    if "MiniGridedCCP" in model_names:
+        CNN_KWARGS_MINI = CNN_KWARGS.copy()
+        CNN_KWARGS_MINI["kernel_size"] = 3
+        models["MiniGridedCCP"] = partial(RegularGridsConvolutionalProcess,
+                                          x_dim=X_DIM,
+                                          Conv=lambda y_dim: make_abs_conv(nn.Conv2d
+                                                                           )(y_dim, y_dim,
+                                                                             groups=y_dim,
+                                                                             kernel_size=3,
+                                                                             padding=1,
+                                                                             bias=False),
+                                          # depth separable resnet
+                                          PseudoTransformer=partial(CNN, n_blocks=7,
+                                                                    **CNN_KWARGS_MINI),
+                                          **MODELS_KWARGS,
+                                          **kwargs)
+
+        models_kwargs["MiniGridedCCP"] = dict(iterator_train__collate_fn=masked_collate,
+                                              iterator_valid__collate_fn=masked_collate)
+
     PseudoTransformerUnetCNN = partial(UnetCNN,
                                        Pool=torch.nn.MaxPool2d,
                                        upsample_mode="bilinear",
@@ -123,6 +143,8 @@ def get_models(model_names, **kwargs):
                                                     iterator_valid__collate_fn=masked_collate,
                                                     # like that actually same batch size
                                                     batch_size=32)
+
+    assert len(models) > 0
 
     return models, models_kwargs
 
@@ -214,7 +236,7 @@ def parse_arguments(args_to_parse):
                         nargs='+',
                         type=str,
                         help='Models.',
-                        choices=['AttnCNP', 'SelfAttnCNP', 'GridedCCP',
+                        choices=['AttnCNP', 'SelfAttnCNP', 'GridedCCP', "MiniGridedCCP",
                                  'GridedUnetCCP', 'GridedSharedUnetCCP'],
                         required=True)
     parser.add_argument('-l', "--lr",

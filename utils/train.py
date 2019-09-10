@@ -197,7 +197,7 @@ def train_models(datasets, models, criterion,
                 trainer.initialize()
                 trainer.load_params(checkpoint=chckpt)
 
-                test_loglike = _eval_save_load(trainer, data_test, test_eval_file,
+                test_loglike = _eval_save_load(trainer.clone(), data_test, test_eval_file,
                                                is_force_rerun=is_retrain)
                 valid_loss, best_epoch = _best_loss(trainer, suffix, mode="valid")
                 train_loss, _ = _best_loss(trainer, suffix, mode="train")

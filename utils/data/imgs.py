@@ -183,7 +183,7 @@ class ZeroShotMultiMNIST(Dataset):
     kwargs:
         Additional arguments to the dataset data generation process `make_multi_mnist_*`.
     """
-    background_color = COLOUR_BLACK
+    missing_px_color = COLOUR_BLUE
     n_classes = 0
     shape = (1, 56, 56)
     files = {"train": "train",
