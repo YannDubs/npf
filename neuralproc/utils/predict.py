@@ -1,7 +1,6 @@
 import torch
 
-__all__ = ["VanillaPredictor", "AutoregressivePredictor",
-           "get_next_autoregressive_closest_pixels"]
+__all__ = ["VanillaPredictor", "AutoregressivePredictor", "GenNextAutoregressivePixelL1"]
 
 
 class VanillaPredictor:
@@ -16,31 +15,39 @@ class VanillaPredictor:
         return mean_y
 
 
-def get_shifted_masks(mask):
-    """Given a batch of masks , returns the same masks shifted to the right,
-    left, up, down."""
-    right_shifted = torch.cat((mask[:, :, -1:, ...] * 0, mask[:, :, :-1, ...]), dim=2)
-    left_shifted = torch.cat((mask[:, :, 1:, ...], mask[:, :, :1, ...] * 0), dim=2)
-    up_shifted = torch.cat((mask[:, 1:, :, ...], mask[:, :1, :, ...] * 0), dim=1)
-    down_shifted = torch.cat((mask[:, -1:, :, ...] * 0, mask[:, :-1, :, ...]), dim=1)
-    return right_shifted, left_shifted, up_shifted, down_shifted
-
-
-def get_next_autoregressive_closest_pixels(mask_cntxt):
+class GenNextAutoregressivePixelL1:
+    """Generates the next autoregressive pixels by using the ones at `d` L1
+    distance from context points.
     """
-    Given the current context mask, return the next
-    temporary target mask by setting all pixels than are at 1 manhatan distance
-    of a context pixel.
-    """
-    next_mask_cntxt = mask_cntxt.clone()
-    slcs = [slice(None)] * (len(mask_cntxt.shape))
 
-    while not (next_mask_cntxt == 1).all():
-        # shift array to the 4 directions to get all neighbours
-        right, left, up, down = get_shifted_masks(next_mask_cntxt)
-        # set all neigbours to 1 by summing + make sure nothing over 1
-        next_mask_cntxt = torch.clamp(right + left + up + down + next_mask_cntxt, 0, 1)
-        yield next_mask_cntxt.clone()
+    def __init__(self, d):
+        self.d = d
+
+    def __call__(self, mask_cntxt):
+        """
+        Given the current context mask, return the next
+        temporary target mask by setting all pixels than are at d manhatan distance
+        of a context pixel.
+        """
+        next_mask_cntxt = mask_cntxt.clone()
+        slcs = [slice(None)] * (len(mask_cntxt.shape))
+
+        while not (next_mask_cntxt == 1).all():
+            for _ in range(self.d):
+                # shift array to the 4 directions to get all neighbours
+                right, left, up, down = self.get_shifted_masks(next_mask_cntxt)
+                # set all neigbours to 1 by summing + make sure nothing over 1
+                next_mask_cntxt = torch.clamp(right + left + up + down + next_mask_cntxt, 0, 1)
+            yield next_mask_cntxt.clone()
+
+    def get_shifted_masks(self, mask):
+        """Given a batch of masks , returns the same masks shifted to the right,
+        left, up, down."""
+        right_shifted = torch.cat((mask[:, :, -1:, ...] * 0, mask[:, :, :-1, ...]), dim=2)
+        left_shifted = torch.cat((mask[:, :, 1:, ...], mask[:, :, :1, ...] * 0), dim=2)
+        up_shifted = torch.cat((mask[:, 1:, :, ...], mask[:, :1, :, ...] * 0), dim=1)
+        down_shifted = torch.cat((mask[:, -1:, :, ...] * 0, mask[:, :-1, :, ...]), dim=1)
+        return right_shifted, left_shifted, up_shifted, down_shifted
 
 
 class AutoregressivePredictor:
@@ -62,7 +69,7 @@ class AutoregressivePredictor:
     """
 
     def __init__(self, model,
-                 gen_autoregressive_trgts=get_next_autoregressive_closest_pixels,
+                 gen_autoregressive_trgts=GenNextAutoregressivePixelL1(1),
                  is_repredict=False):
         self.predictor = VanillaPredictor(model)
         self.gen_autoregressive_trgts = gen_autoregressive_trgts
