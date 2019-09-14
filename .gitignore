@@ -8,6 +8,7 @@ doc/
 !utils/data
 src/
 results
+.vscode
 
 # Byte-compiled / optimized / DLL files
 *.egg-info
