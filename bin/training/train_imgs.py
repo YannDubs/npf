@@ -1,9 +1,11 @@
 import os
 from os.path import dirname, abspath
+
 base_dir = dirname(dirname(dirname(abspath(__file__))))
 os.chdir(base_dir)
 
 import sys
+
 sys.path.append("notebooks")
 sys.path.append(".")
 
@@ -22,9 +24,13 @@ from neuralproc import RegularGridsConvolutionalProcess, AttentiveNeuralProcess,
 from neuralproc.predefined import UnetCNN, CNN, SelfAttention, MLP, ResConvBlock
 from neuralproc import merge_flat_input
 from neuralproc.utils.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
-from neuralproc.utils.helpers import (MultivariateNormalDiag, ProbabilityConverter,
-                                      make_abs_conv, channels_to_2nd_dim,
-                                      channels_to_last_dim)
+from neuralproc.utils.helpers import (
+    MultivariateNormalDiag,
+    ProbabilityConverter,
+    make_abs_conv,
+    channels_to_2nd_dim,
+    channels_to_last_dim,
+)
 
 from utils.train import train_models
 from utils.data import get_dataset
@@ -33,24 +39,34 @@ from utils.data.dataloader import cntxt_trgt_collate
 
 
 X_DIM = 2
-MODELS_KWARGS = dict(r_dim=128,
-                     # make sure output is in 0,1 as images preprocessed so
-                     pred_loc_transformer=lambda mu: torch.sigmoid(mu))
-CNN_KWARGS = dict(ConvBlock=ResConvBlock,
-                  Conv=nn.Conv2d,
-                  Normalization=nn.BatchNorm2d,  # ??
-                  is_chan_last=True,
-                  kernel_size=5)
-GET_CNTXT_TRGT = GridCntxtTrgtGetter(context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
-                                     target_masker=no_masker,
-                                     is_add_cntxts_to_trgts=False)
+MODELS_KWARGS = dict(
+    r_dim=128,
+    # make sure output is in 0,1 as images preprocessed so
+    pred_loc_transformer=lambda mu: torch.sigmoid(mu),
+)
+CNN_KWARGS = dict(
+    ConvBlock=ResConvBlock,
+    Conv=nn.Conv2d,
+    Normalization=nn.BatchNorm2d,  # ??
+    is_chan_last=True,
+    kernel_size=5,
+)
+GET_CNTXT_TRGT = GridCntxtTrgtGetter(
+    context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
+    target_masker=no_masker,
+    is_add_cntxts_to_trgts=False,
+)
 
 
 def add_y_dim(models, datasets):
     """Add y _dim to all ofthe models depending on the dataset."""
-    return {data_name: {model_name: partial(model, y_dim=data_train.shape[0])
-                        for model_name, model in models.items()}
-            for data_name, data_train in datasets.items()}
+    return {
+        data_name: {
+            model_name: partial(model, y_dim=data_train.shape[0])
+            for model_name, model in models.items()
+        }
+        for data_name, data_train in datasets.items()
+    }
 
 
 def get_models(model_names, **kwargs):
@@ -58,18 +74,16 @@ def get_models(model_names, **kwargs):
     models_kwargs = dict()
 
     if "AttnCNP" in model_names:
-        models["AttnCNP"] = partial(AttentiveNeuralProcess,
-                                    x_dim=X_DIM,
-                                    attention="transformer",
-                                    **MODELS_KWARGS,
-                                    **kwargs)
+        models["AttnCNP"] = partial(
+            AttentiveNeuralProcess, x_dim=X_DIM, attention="transformer", **MODELS_KWARGS, **kwargs
+        )
         models_kwargs["AttnCNP"] = dict(batch_size=32)
 
     if "SelfAttnCNP" in model_names:
         AttnCNP = get_models(["AttnCNP"])[0]["AttnCNP"]
-        models["SelfAttnCNP"] = partial(AttnCNP,
-                                        XYEncoder=merge_flat_input(SelfAttention,
-                                                                   is_sum_merge=True))
+        models["SelfAttnCNP"] = partial(
+            AttnCNP, XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True)
+        )
         # use smaller batch size because memory ++
         models_kwargs["SelfAttnCNP"] = dict(batch_size=2, lr=5e-4)
 
@@ -77,72 +91,82 @@ def get_models(model_names, **kwargs):
     masked_collate = cntxt_trgt_collate(GET_CNTXT_TRGT, is_return_masks=True)
 
     if "GridedCCP" in model_names:
-        models["GridedCCP"] = partial(RegularGridsConvolutionalProcess,
-                                      x_dim=X_DIM,
-                                      # depth separable resnet
-                                      PseudoTransformer=partial(CNN, n_blocks=5, **CNN_KWARGS),
-                                      **MODELS_KWARGS,
-                                      **kwargs)
+        models["GridedCCP"] = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=X_DIM,
+            # depth separable resnet
+            PseudoTransformer=partial(CNN, n_blocks=5, **CNN_KWARGS),
+            **MODELS_KWARGS,
+            **kwargs
+        )
 
-        models_kwargs["GridedCCP"] = dict(iterator_train__collate_fn=masked_collate,
-                                          iterator_valid__collate_fn=masked_collate)
+        models_kwargs["GridedCCP"] = dict(
+            iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
+        )
 
     if "MiniGridedCCP" in model_names:
         CNN_KWARGS_MINI = CNN_KWARGS.copy()
         CNN_KWARGS_MINI["kernel_size"] = 5
-        models["MiniGridedCCP"] = partial(RegularGridsConvolutionalProcess,
-                                          x_dim=X_DIM,
-                                          Conv=lambda y_dim: make_abs_conv(nn.Conv2d
-                                                                           )(y_dim, y_dim,
-                                                                             groups=y_dim,
-                                                                             kernel_size=11,
-                                                                             padding=5,
-                                                                             bias=False),
-                                          # depth separable resnet
-                                          PseudoTransformer=partial(CNN, n_blocks=5,
-                                                                    **CNN_KWARGS_MINI),
-                                          **MODELS_KWARGS,
-                                          **kwargs)
+        models["MiniGridedCCP"] = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=X_DIM,
+            Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(
+                y_dim, y_dim, groups=y_dim, kernel_size=11, padding=5, bias=False
+            ),
+            # depth separable resnet
+            PseudoTransformer=partial(CNN, n_blocks=5, **CNN_KWARGS_MINI),
+            **MODELS_KWARGS,
+            **kwargs
+        )
 
-        models_kwargs["MiniGridedCCP"] = dict(iterator_train__collate_fn=masked_collate,
-                                              iterator_valid__collate_fn=masked_collate)
+        models_kwargs["MiniGridedCCP"] = dict(
+            iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
+        )
 
-    PseudoTransformerUnetCNN = partial(UnetCNN,
-                                       Pool=torch.nn.MaxPool2d,
-                                       upsample_mode="bilinear",
-                                       max_nchannels=64,  # use constant number of channels and chosen to have similar # param
-                                       n_blocks=9,
-                                       **CNN_KWARGS,
-                                       **kwargs)
+    PseudoTransformerUnetCNN = partial(
+        UnetCNN,
+        Pool=torch.nn.MaxPool2d,
+        upsample_mode="bilinear",
+        max_nchannels=64,  # use constant number of channels and chosen to have similar # param
+        n_blocks=9,
+        **CNN_KWARGS,
+        **kwargs
+    )
 
     if "GridedUnetCCP" in model_names:
-        models["GridedUnetCCP"] = partial(RegularGridsConvolutionalProcess,
-                                          x_dim=X_DIM,
-                                          # Unet CNN with depth separable resnet blocks
-                                          PseudoTransformer=PseudoTransformerUnetCNN,
-                                          **MODELS_KWARGS,
-                                          **kwargs)
-        models_kwargs["GridedUnetCCP"] = dict(iterator_train__collate_fn=masked_collate,
-                                              iterator_valid__collate_fn=masked_collate)
+        models["GridedUnetCCP"] = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=X_DIM,
+            # Unet CNN with depth separable resnet blocks
+            PseudoTransformer=PseudoTransformerUnetCNN,
+            **MODELS_KWARGS,
+            **kwargs
+        )
+        models_kwargs["GridedUnetCCP"] = dict(
+            iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
+        )
 
     if "GridedSharedUnetCCP" in model_names:
-        models["GridedSharedUnetCCP"] = partial(RegularGridsConvolutionalProcess,
-                                                x_dim=X_DIM,
-                                                # Unet CNN with depth separable resnet blocks
-                                                PseudoTransformer=partial(PseudoTransformerUnetCNN,
-                                                                          is_force_same_bottleneck=True),
-                                                **MODELS_KWARGS,
-                                                **kwargs)
+        models["GridedSharedUnetCCP"] = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=X_DIM,
+            # Unet CNN with depth separable resnet blocks
+            PseudoTransformer=partial(PseudoTransformerUnetCNN, is_force_same_bottleneck=True),
+            **MODELS_KWARGS,
+            **kwargs
+        )
 
         # repreat the batch twice => every function has 2 different cntxt and trgt samples
-        repeat_collate = cntxt_trgt_collate(GET_CNTXT_TRGT,
-                                            is_return_masks=True,
-                                            is_repeat_batch=True)
-        models_kwargs["GridedSharedUnetCCP"] = dict(iterator_train__collate_fn=repeat_collate,
-                                                    # don't repeat when eval
-                                                    iterator_valid__collate_fn=masked_collate,
-                                                    # like that actually same batch size
-                                                    batch_size=32)
+        repeat_collate = cntxt_trgt_collate(
+            GET_CNTXT_TRGT, is_return_masks=True, is_repeat_batch=True
+        )
+        models_kwargs["GridedSharedUnetCCP"] = dict(
+            iterator_train__collate_fn=repeat_collate,
+            # don't repeat when eval
+            iterator_valid__collate_fn=masked_collate,
+            # like that actually same batch size
+            batch_size=32,
+        )
 
     assert len(models) > 0
 
@@ -155,20 +179,23 @@ def get_datasets(datasets):
     datasets_kwargs = dict()
 
     if "celeba32" in datasets:
-        celeba32_train, celeba32_test = train_dev_split(get_dataset("celeba32")(),
-                                                        dev_size=0.1, is_stratify=False)
+        celeba32_train, celeba32_test = train_dev_split(
+            get_dataset("celeba32")(), dev_size=0.1, is_stratify=False
+        )
         train_datasets["celeba32"] = celeba32_train
         test_datasets["celeba32"] = celeba32_test
 
     if "celeba64" in datasets:
-        celeba64_train, celeba64_test = train_dev_split(get_dataset("celeba64")(),
-                                                        dev_size=0.1, is_stratify=False)
+        celeba64_train, celeba64_test = train_dev_split(
+            get_dataset("celeba64")(), dev_size=0.1, is_stratify=False
+        )
         train_datasets["celeba64"] = celeba64_train
         test_datasets["celeba64"] = celeba64_test
 
     if "zs-multi-mnist" in datasets:
-        zs_mmnist_train, zs_mmnist_test = train_dev_split(get_dataset("zs-multi-mnist")(),
-                                                          dev_size=0.1, is_stratify=False)
+        zs_mmnist_train, zs_mmnist_test = train_dev_split(
+            get_dataset("zs-multi-mnist")(), dev_size=0.1, is_stratify=False
+        )
         train_datasets["zs-multi-mnist"] = zs_mmnist_train
         test_datasets["zs-multi-mnist"] = zs_mmnist_test
 
@@ -184,17 +211,19 @@ def get_datasets(datasets):
 
 
 def train(models, train_datasets, **kwargs):
-    _ = train_models(train_datasets,
-                     add_y_dim(models, train_datasets),
-                     NeuralProcessLoss,
-                     chckpnt_dirname="results/neural_process_imgs/",
-                     is_retrain=True,
-                     train_split=skorch.dataset.CVSplit(0.1),  # use 10% of data for validation
-                     iterator_train__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
-                     iterator_valid__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
-                     patience=10,
-                     seed=123,
-                     **kwargs)
+    _ = train_models(
+        train_datasets,
+        add_y_dim(models, train_datasets),
+        NeuralProcessLoss,
+        chckpnt_dirname="results/neural_process_imgs/",
+        is_retrain=True,
+        train_split=skorch.dataset.CVSplit(0.1),  # use 10% of data for validation
+        iterator_train__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
+        iterator_valid__collate_fn=cntxt_trgt_collate(GET_CNTXT_TRGT),
+        patience=10,
+        seed=123,
+        **kwargs
+    )
 
 
 def main(args):
@@ -205,70 +234,77 @@ def main(args):
     # MODELS
     if args.no_batchnorm:
         CNN_KWARGS["Normalization"] = nn.Identity
-    pred_scale_transformer = lambda scale_trgt: args.min_sigma + (1 - args.min_sigma
-                                                                  ) * F.softplus(scale_trgt)
-    models, models_kwargs = get_models(args.models,
-                                       pred_scale_transformer=pred_scale_transformer)
+    pred_scale_transformer = lambda scale_trgt: args.min_sigma + (1 - args.min_sigma) * F.softplus(
+        scale_trgt
+    )
+    models, models_kwargs = get_models(args.models, pred_scale_transformer=pred_scale_transformer)
 
     # TRAINING
     callbacks = [ProgressBar()] if args.is_progressbar else []
-    train(models, train_datasets,
-          test_datasets=test_datasets,
-          datasets_kwargs=datasets_kwargs,
-          models_kwargs=models_kwargs,
-          callbacks=callbacks,
-          runs=args.runs,
-          starting_run=args.starting_run,
-          max_epochs=args.max_epochs,
-          lr=args.lr,
-          batch_size=args.batch_size)
+    train(
+        models,
+        train_datasets,
+        test_datasets=test_datasets,
+        datasets_kwargs=datasets_kwargs,
+        models_kwargs=models_kwargs,
+        callbacks=callbacks,
+        runs=args.runs,
+        starting_run=args.starting_run,
+        max_epochs=args.max_epochs,
+        lr=args.lr,
+        batch_size=args.batch_size,
+    )
 
 
 def parse_arguments(args_to_parse):
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--datasets',
-                        nargs='+',
-                        type=str,
-                        help='Datasets.',
-                        choices=['celeba32', 'celeba64', 'svhn', 'mnist', "zs-multi-mnist"],
-                        required=True)
-    parser.add_argument('-m', '--models',
-                        nargs='+',
-                        type=str,
-                        help='Models.',
-                        choices=['AttnCNP', 'SelfAttnCNP', 'GridedCCP', "MiniGridedCCP",
-                                 'GridedUnetCCP', 'GridedSharedUnetCCP'],
-                        required=True)
-    parser.add_argument('-l', "--lr",
-                        default=1e-3,
-                        type=float,
-                        help='Learning rate.')
-    parser.add_argument('-e', "--max-epochs",
-                        default=100,
-                        type=int,
-                        help='Max number of epochs.')
-    parser.add_argument('-b', "--batch-size",
-                        default=64,
-                        type=int,
-                        help='Batch size.')
-    parser.add_argument('-r', '--runs',
-                        default=1,
-                        type=int,
-                        help='Number of runs.')
-    parser.add_argument('--starting-run',
-                        default=0,
-                        type=int,
-                        help='Starting run. This is useful if a couple of runs have already been trained, and you want to continue from there.')
-    parser.add_argument('--min-sigma',
-                        default=0.1,
-                        type=float,
-                        help='Lowest bound on the std that the model can predict.')
-    parser.add_argument('--no-batchnorm',
-                        action='store_true',
-                        help='Whether to remove batchnorm when training CCP.')
-    parser.add_argument('--is-progressbar',
-                        action='store_true',
-                        help='Whether to use a progressbar.')
+    parser.add_argument(
+        "-d",
+        "--datasets",
+        nargs="+",
+        type=str,
+        help="Datasets.",
+        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
+        required=True,
+    )
+    parser.add_argument(
+        "-m",
+        "--models",
+        nargs="+",
+        type=str,
+        help="Models.",
+        choices=[
+            "AttnCNP",
+            "SelfAttnCNP",
+            "GridedCCP",
+            "MiniGridedCCP",
+            "GridedUnetCCP",
+            "GridedSharedUnetCCP",
+        ],
+        required=True,
+    )
+    parser.add_argument("-l", "--lr", default=1e-3, type=float, help="Learning rate.")
+    parser.add_argument("-e", "--max-epochs", default=100, type=int, help="Max number of epochs.")
+    parser.add_argument("-b", "--batch-size", default=64, type=int, help="Batch size.")
+    parser.add_argument("-r", "--runs", default=1, type=int, help="Number of runs.")
+    parser.add_argument(
+        "--starting-run",
+        default=0,
+        type=int,
+        help="Starting run. This is useful if a couple of runs have already been trained, and you want to continue from there.",
+    )
+    parser.add_argument(
+        "--min-sigma",
+        default=0.1,
+        type=float,
+        help="Lowest bound on the std that the model can predict.",
+    )
+    parser.add_argument(
+        "--no-batchnorm", action="store_true", help="Whether to remove batchnorm when training CCP."
+    )
+    parser.add_argument(
+        "--is-progressbar", action="store_true", help="Whether to use a progressbar."
+    )
     args = parser.parse_args(args_to_parse)
     return args
 
