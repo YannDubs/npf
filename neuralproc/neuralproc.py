@@ -9,9 +9,13 @@ from torch.distributions import Normal
 
 from neuralproc.predefined import MLP, CNN, UnetCNN, ResConvBlock
 from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import (MultivariateNormalDiag, ProbabilityConverter,
-                                      make_abs_conv, channels_to_2nd_dim,
-                                      channels_to_last_dim)
+from neuralproc.utils.helpers import (
+    MultivariateNormalDiag,
+    ProbabilityConverter,
+    make_abs_conv,
+    channels_to_2nd_dim,
+    channels_to_last_dim,
+)
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
@@ -20,8 +24,12 @@ from neuralproc.utils.predict import get_next_autoregressive_closest_pixels
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 
 
-__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "ConvolutionalProcess",
-           "RegularGridsConvolutionalProcess"]
+__all__ = [
+    "NeuralProcess",
+    "AttentiveNeuralProcess",
+    "ConvolutionalProcess",
+    "RegularGridsConvolutionalProcess",
+]
 
 
 class NeuralProcess(nn.Module):
@@ -70,7 +78,7 @@ class NeuralProcess(nn.Module):
             - `merge_flat_input(MLP)` : predict with MLP.
             - `merge_flat_input(SelfAttention, is_sum_merge=True)` : predict
             with self attention mechanisms (using `X_transf + Y` as input) to have
-            coherant predictions (not use in attentive neural process [4] but in
+            coherent predictions (not use in attentive neural process [4] but in
             image transformer [5]).
             - `discard_ith_arg(MLP, 0)` if want the decoding to only depend on r.
 
@@ -113,7 +121,7 @@ class NeuralProcess(nn.Module):
         the context points.
 
     get_gen_autoregressive_trgts : callable, optional
-        Function which returns a generator of the next mask target given the inital
+        Function which returns a generator of the next mask target given the initial
         mask context `get_next_tgrts(mask_cntxt)`. Only used if
         `n_autoregressive_steps` not 0.
 
@@ -132,28 +140,28 @@ class NeuralProcess(nn.Module):
         (2018).
     """
 
-    def __init__(self, x_dim, y_dim,
-                 r_dim=128,
-                 x_transf_dim=-1,
-                 XEncoder=None,
-                 XYEncoder=None,
-                 Decoder=None,
-                 LatentEncoder=MLP,
-                 encoded_path="deterministic",
-                 PredictiveDistribution=Normal,
-                 is_use_x=True,
-                 pred_loc_transformer=nn.Identity(),
-                 pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt),
-                 get_gen_autoregressive_trgts=get_next_autoregressive_closest_pixels,
-                 n_autoregressive_steps=0
-                 ):
+    def __init__(
+        self,
+        x_dim,
+        y_dim,
+        r_dim=128,
+        x_transf_dim=-1,
+        XEncoder=None,
+        XYEncoder=None,
+        Decoder=None,
+        LatentEncoder=MLP,
+        encoded_path="deterministic",
+        PredictiveDistribution=Normal,
+        is_use_x=True,
+        pred_loc_transformer=nn.Identity(),
+        pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt),
+        get_gen_autoregressive_trgts=get_next_autoregressive_closest_pixels,
+        n_autoregressive_steps=0,
+    ):
         super().__init__()
-        Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
-                                                                        XYEncoder,
-                                                                        x_transf_dim,
-                                                                        XEncoder,
-                                                                        is_use_x,
-                                                                        r_dim)
+        Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(
+            Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim
+        )
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.r_dim = r_dim
@@ -175,7 +183,7 @@ class NeuralProcess(nn.Module):
 
         self.x_encoder = XEncoder(self.x_dim, self.x_transf_dim)
         self.xy_encoder = XYEncoder(self.x_transf_dim, self.y_dim, self.r_dim)
-        # *2 because mean and var
+        # times 2 because mean and var
         self.decoder = Decoder(self.x_transf_dim, self.r_dim, self.y_dim * 2)
 
         if self.encoded_path in ["latent", "both"]:
@@ -193,10 +201,12 @@ class NeuralProcess(nn.Module):
         weights_init(self)
 
     def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
-        dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True,
-                                   hidden_size=64)
-        dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True,
-                                     hidden_size=64)
+        dflt_sub_decoder = partial(
+            MLP, n_hidden_layers=4, is_force_hid_smaller=True, hidden_size=64
+        )
+        dflt_sub_xyencoder = partial(
+            MLP, n_hidden_layers=2, is_force_hid_smaller=True, hidden_size=64
+        )
 
         # don't use `x` to be translation equivariant
         if not is_use_x:
@@ -257,8 +267,17 @@ class NeuralProcess(nn.Module):
 
         # input assumed to be in [-1,1] during training
         if self.training:
-            if X_cntxt.max().item() > 1 or X_cntxt.min().item() < -1 or X_trgt.max().item() > 1 and X_trgt.min().item() < -1:
-                raise ValueError("Position inputs during training should be in [-1,1]. {} <= X_cntxt <= {} ; {} <= X_trgt <= {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
+            if (
+                X_cntxt.max().item() > 1
+                or X_cntxt.min().item() < -1
+                or X_trgt.max().item() > 1
+                and X_trgt.min().item() < -1
+            ):
+                raise ValueError(
+                    "Position inputs during training should be in [-1,1]. {} <= X_cntxt <= {} ; {} <= X_trgt <= {}.".format(
+                        X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()
+                    )
+                )
 
         R_det, z_sample, q_z_cntxt, q_z_trgt = None, None, None, None
 
@@ -371,7 +390,9 @@ class NeuralProcess(nn.Module):
         """Given the last predictions, and inputs, return the input for the next
         autoregressive step"""
         if self.n_autoregressive_steps > 0:
-            raise NotImplementedError("Autoregressive preprocessing not yet implemented for general NeuralProcess")
+            raise NotImplementedError(
+                "Autoregressive preprocessing not yet implemented for general NeuralProcess"
+            )
         return X_cntxt, Y_cntxt
 
 
@@ -405,12 +426,16 @@ class AttentiveNeuralProcess(NeuralProcess):
         arXiv:1901.05761 (2019).
     """
 
-    def __init__(self, x_dim, y_dim,
-                 attention="scaledot",
-                 is_translation_equiv=False,
-                 encoded_path="both",
-                 attention_kwargs={},
-                 **kwargs):
+    def __init__(
+        self,
+        x_dim,
+        y_dim,
+        attention="scaledot",
+        is_translation_equiv=False,
+        encoded_path="both",
+        attention_kwargs={},
+        **kwargs
+    ):
 
         self.is_translation_equiv = is_translation_equiv
         if self.is_translation_equiv:
@@ -421,8 +446,9 @@ class AttentiveNeuralProcess(NeuralProcess):
 
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
-        self.attender = get_attender(attention, self.x_transf_dim, self.r_dim,
-                                     self.r_dim, **attention_kwargs)
+        self.attender = get_attender(
+            attention, self.x_transf_dim, self.r_dim, self.r_dim, **attention_kwargs
+        )
 
         if self.is_translation_equiv:
             self.rel_pos_encoder = RelativeSinusoidalEncodings(x_dim, self.r_dim)
@@ -440,7 +466,7 @@ class AttentiveNeuralProcess(NeuralProcess):
         if self.is_translation_equiv:
             # dirty trick such that keys and queries do not have positioning
             # information but are the correct size.
-            keys, queries = keys * 0., queries * 0.
+            keys, queries = keys * 0.0, queries * 0.0
 
             # size = [batch_size, n_queries, n_keys, kq_size]
             attender_kwargs = dict(rel_pos_enc=self.rel_pos_encoder(X_cntxt, X_trgt))
@@ -471,7 +497,7 @@ class ConvolutionalProcess(NeuralProcess):
 
     n_pseudo : int, optional
         Number of pseudo-inputs (temporary queries) to use. The pseudo-inputs
-        will be regularaly sampled.
+        will be regularly sampled.
 
     InpToPseudo : callable or str, optional
         Callable or name of attention to use for {inp} -> {pseudo_inp}.
@@ -509,37 +535,44 @@ class ConvolutionalProcess(NeuralProcess):
     [Jonathan]
     """
 
-    def __init__(self, x_dim, y_dim,
-                 n_pseudo=256,
-                 InpToPseudo=SetConv,
-                 PseudoTransformer=partial(CNN,
-                                           ConvBlock=ResConvBlock,
-                                           Conv=nn.Conv1d,
-                                           n_blocks=3,
-                                           Normalization=nn.Identity,
-                                           is_chan_last=True,
-                                           kernel_size=11),
-                 PseudoToOut=SetConv,
-                 **kwargs):
+    def __init__(
+        self,
+        x_dim,
+        y_dim,
+        n_pseudo=256,
+        InpToPseudo=SetConv,
+        PseudoTransformer=partial(
+            CNN,
+            ConvBlock=ResConvBlock,
+            Conv=nn.Conv1d,
+            n_blocks=3,
+            Normalization=nn.Identity,
+            is_chan_last=True,
+            kernel_size=11,
+        ),
+        PseudoToOut=SetConv,
+        **kwargs
+    ):
 
-        super().__init__(x_dim, y_dim,
-                         encoded_path="deterministic",
-                         is_use_x=False,
-                         XYEncoder=nn.Identity,
-                         **kwargs)
+        super().__init__(
+            x_dim,
+            y_dim,
+            encoded_path="deterministic",
+            is_use_x=False,
+            XYEncoder=nn.Identity,
+            **kwargs
+        )
 
         self.n_pseudo = n_pseudo
         self.pseudo_keys = torch.linspace(-1, 1, self.n_pseudo)
 
         if InpToPseudo is not None:
-            self.inp_to_pseudo = get_attender(InpToPseudo, self.x_dim,
-                                              self.y_dim, self.r_dim)
+            self.inp_to_pseudo = get_attender(InpToPseudo, self.x_dim, self.y_dim, self.r_dim)
 
         self.pseudo_transformer = PseudoTransformer(self.r_dim)
 
         if PseudoToOut is not None:
-            self.pseudo_to_out = get_attender(PseudoToOut, self.x_dim,
-                                              self.r_dim, self.r_dim)
+            self.pseudo_to_out = get_attender(PseudoToOut, self.x_dim, self.r_dim, self.r_dim)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -556,9 +589,7 @@ class ConvolutionalProcess(NeuralProcess):
         keys, values, queries = X_cntxt, Y_cntxt, X_trgt
 
         # size = [batch_size, n_pseudo, x_dim]
-        pseudo_keys = pseudo_keys.expand(keys.size(0),
-                                         pseudo_keys.size(1),
-                                         self.x_dim)
+        pseudo_keys = pseudo_keys.expand(keys.size(0), pseudo_keys.size(1), self.x_dim)
 
         # size = [batch_size, n_pseudo, r_dim]
         pseudo_values = self.inp_to_pseudo(keys, pseudo_keys, values)
@@ -643,43 +674,54 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
     [Jonathan]
     """
 
-    def __init__(self, x_dim, y_dim,
-                 # uses only depth wise + make sure positive to be interpreted as a density
-                 Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim,
-                                                             groups=y_dim,
-                                                             kernel_size=11,
-                                                             padding=11 // 2,  # kernel /2
-                                                             bias=False),
-                 PseudoTransformer=partial(CNN,
-                                           ConvBlock=ResConvBlock,
-                                           Conv=nn.Conv2d,
-                                           n_blocks=3,
-                                           Normalization=nn.Identity,
-                                           is_chan_last=True,
-                                           kernel_size=11),
-                 is_autoregress_confidence=False,  # DEV MODE
-                 **kwargs):
-        super().__init__(x_dim, y_dim,
-                         InpToPseudo=None,  # will redefine
-                         PseudoTransformer=PseudoTransformer,
-                         PseudoToOut=None,  # will redefine
-                         **kwargs)
+    def __init__(
+        self,
+        x_dim,
+        y_dim,
+        # uses only depth wise + make sure positive to be interpreted as a density
+        Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(
+            y_dim, y_dim, groups=y_dim, kernel_size=11, padding=11 // 2, bias=False  # kernel /2
+        ),
+        PseudoTransformer=partial(
+            CNN,
+            ConvBlock=ResConvBlock,
+            Conv=nn.Conv2d,
+            n_blocks=3,
+            Normalization=nn.Identity,
+            is_chan_last=True,
+            kernel_size=11,
+        ),
+        is_autoregress_confidence=False,  # DEV MODE
+        **kwargs
+    ):
+        super().__init__(
+            x_dim,
+            y_dim,
+            InpToPseudo=None,  # will redefine
+            PseudoTransformer=PseudoTransformer,
+            PseudoToOut=None,  # will redefine
+            **kwargs
+        )
 
         self.conv = Conv(y_dim)
         self.resizer = nn.Linear(self.y_dim * 2, self.r_dim)  # 2 because also confidence channels
-        self.density_to_conf = ProbabilityConverter(is_train_temperature=True,
-                                                    is_train_bias=True,
-                                                    trainable_dim=self.y_dim,
-                                                    # higher density => higher conf
-                                                    temperature_transformer=F.softplus)
+        self.density_to_conf = ProbabilityConverter(
+            is_train_temperature=True,
+            is_train_bias=True,
+            trainable_dim=self.y_dim,
+            # higher density => higher conf
+            temperature_transformer=F.softplus,
+        )
 
         self.is_autoregress_confidence = is_autoregress_confidence
 
         if self.is_autoregress_confidence:
-            self.std_to_conf = ProbabilityConverter(is_train_temperature=True,
-                                                    is_train_bias=True,
-                                                    # higher std => lower conf
-                                                    temperature_transformer=lambda x: -F.softplus(x))
+            self.std_to_conf = ProbabilityConverter(
+                is_train_temperature=True,
+                is_train_bias=True,
+                # higher std => lower conf
+                temperature_transformer=lambda x: -F.softplus(x),
+            )
 
         self.reset_parameters()
 
@@ -697,8 +739,9 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
         # normalized convolution
         out = numerator / torch.clamp(denominator, min=1e-5)
         # initial density could be very large => make sure not saturating sigmoid (*0.1)
-        confidence = self.density_to_conf(denominator.view(-1, self.y_dim) * 0.1
-                                          ).view(batch_size, self.y_dim, *grid_shape)
+        confidence = self.density_to_conf(denominator.view(-1, self.y_dim) * 0.1).view(
+            batch_size, self.y_dim, *grid_shape
+        )
         # don't concatenate density but a bounded version ("confidence") =>
         # doesn't break under high density
         out = torch.cat([out, confidence], dim=1)
@@ -743,7 +786,9 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
                 std_y_pred = p_y_pred.base_dist.scale
                 std_y_pred = std_y_pred.view(-1, std_y_pred.size(-1)).mean(-1, keepdim=True)
                 # initial std could be very large => make sure not saturating sigmoid (*0.1)
-                cur_mask_trgt[cur_mask_trgt.byte()] = self.std_to_conf(std_y_pred * 0.1).squeeze(-1)  # DEV MODE
+                cur_mask_trgt[cur_mask_trgt.byte()] = self.std_to_conf(std_y_pred * 0.1).squeeze(
+                    -1
+                )  # DEV MODE
 
             mask_cntxt = cur_mask_trgt
 
