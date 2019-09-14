@@ -40,7 +40,7 @@ CNN_KWARGS = dict(ConvBlock=ResConvBlock,
                   Conv=nn.Conv2d,
                   Normalization=nn.BatchNorm2d,  # ??
                   is_chan_last=True,
-                  kernel_size=11)
+                  kernel_size=5)
 GET_CNTXT_TRGT = GridCntxtTrgtGetter(context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
                                      target_masker=no_masker,
                                      is_add_cntxts_to_trgts=False)
@@ -80,7 +80,7 @@ def get_models(model_names, **kwargs):
         models["GridedCCP"] = partial(RegularGridsConvolutionalProcess,
                                       x_dim=X_DIM,
                                       # depth separable resnet
-                                      PseudoTransformer=partial(CNN, n_blocks=7, **CNN_KWARGS),
+                                      PseudoTransformer=partial(CNN, n_blocks=5, **CNN_KWARGS),
                                       **MODELS_KWARGS,
                                       **kwargs)
 
@@ -89,17 +89,17 @@ def get_models(model_names, **kwargs):
 
     if "MiniGridedCCP" in model_names:
         CNN_KWARGS_MINI = CNN_KWARGS.copy()
-        CNN_KWARGS_MINI["kernel_size"] = 3
+        CNN_KWARGS_MINI["kernel_size"] = 5
         models["MiniGridedCCP"] = partial(RegularGridsConvolutionalProcess,
                                           x_dim=X_DIM,
                                           Conv=lambda y_dim: make_abs_conv(nn.Conv2d
                                                                            )(y_dim, y_dim,
                                                                              groups=y_dim,
-                                                                             kernel_size=3,
-                                                                             padding=1,
+                                                                             kernel_size=11,
+                                                                             padding=5,
                                                                              bias=False),
                                           # depth separable resnet
-                                          PseudoTransformer=partial(CNN, n_blocks=7,
+                                          PseudoTransformer=partial(CNN, n_blocks=5,
                                                                     **CNN_KWARGS_MINI),
                                           **MODELS_KWARGS,
                                           **kwargs)

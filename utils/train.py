@@ -14,6 +14,7 @@ from skorch.helper import predefined_split
 from .helpers import FixRandomSeed
 from .evaluate import eval_loglike
 
+
 __all__ = ["train_models"]
 
 EVAL_FILENAME = "eval.csv"
@@ -197,8 +198,13 @@ def train_models(datasets, models, criterion,
                 trainer.initialize()
                 trainer.load_params(checkpoint=chckpt)
 
-                test_loglike = _eval_save_load(trainer.clone(), data_test, test_eval_file,
+                # return the training rather than testing history as dflt
+                history = deepcopy(trainer.history)
+                test_loglike = _eval_save_load(trainer, data_test, test_eval_file,
                                                is_force_rerun=is_retrain)
+                trainer.test_history = deepcopy(trainer.history)
+                trainer.history = history
+
                 valid_loss, best_epoch = _best_loss(trainer, suffix, mode="valid")
                 train_loss, _ = _best_loss(trainer, suffix, mode="train")
 

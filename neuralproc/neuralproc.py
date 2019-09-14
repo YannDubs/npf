@@ -19,7 +19,7 @@ from neuralproc.utils.helpers import (
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
-from neuralproc.utils.predict import get_next_autoregressive_closest_pixels
+from neuralproc.utils.predict import GenNextAutoregressivePixelL1
 
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 

@@ -9,6 +9,7 @@ doc/
 src/
 results
 .vscode
+__MACOSX/
 
 # Byte-compiled / optimized / DLL files
 *.egg-info
