@@ -6,8 +6,16 @@ import numpy as np
 
 from .helpers import ratio_to_int, prod, indep_shuffle_, channels_to_last_dim
 
-__all__ = ["get_all_indcs", "GetRangeIndcs", "GetRandomIndcs", "CntxtTrgtGetter",
-           "RandomMasker", "half_masker", "no_masker", "GridCntxtTrgtGetter"]
+__all__ = [
+    "get_all_indcs",
+    "GetRangeIndcs",
+    "GetRandomIndcs",
+    "CntxtTrgtGetter",
+    "RandomMasker",
+    "half_masker",
+    "no_masker",
+    "GridCntxtTrgtGetter",
+]
 
 
 ### INDICES SELECTORS ###
@@ -62,11 +70,7 @@ class GetRandomIndcs:
         Range tuple (max, min) for the indices.
     """
 
-    def __init__(self,
-                 min_n_indcs=.1,
-                 max_n_indcs=.5,
-                 is_batch_share=False,
-                 range_indcs=None):
+    def __init__(self, min_n_indcs=0.1, max_n_indcs=0.5, is_batch_share=False, range_indcs=None):
         self.min_n_indcs = min_n_indcs
         self.max_n_indcs = max_n_indcs
         self.is_batch_share = is_batch_share
@@ -85,9 +89,11 @@ class GetRandomIndcs:
             indcs = torch.randperm(n_possible_points)[:n_indcs]
             indcs = indcs.unsqueeze(0).expand(batch_size, n_indcs)
         else:
-            indcs = np.arange(n_possible_points
-                              ).reshape(1, n_possible_points
-                                        ).repeat(batch_size, axis=0)
+            indcs = (
+                np.arange(n_possible_points)
+                .reshape(1, n_possible_points)
+                .repeat(batch_size, axis=0)
+            )
             indep_shuffle_(indcs, -1)
             indcs = torch.from_numpy(indcs[:, :n_indcs])
 
@@ -114,19 +120,17 @@ class CntxtTrgtGetter:
         Whether to add the context points to the targets.
     """
 
-    def __init__(self,
-                 contexts_getter=GetRandomIndcs(),
-                 targets_getter=get_all_indcs,
-                 is_add_cntxts_to_trgts=False):
+    def __init__(
+        self,
+        contexts_getter=GetRandomIndcs(),
+        targets_getter=get_all_indcs,
+        is_add_cntxts_to_trgts=False,
+    ):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
 
-    def __call__(self, X,
-                 y=None,
-                 context_indcs=None,
-                 target_indcs=None,
-                 is_return_indcs=False):
+    def __call__(self, X, y=None, context_indcs=None, target_indcs=None, is_return_indcs=False):
         """
         Parameters
         ----------
@@ -211,13 +215,8 @@ class RandomMasker(GetRandomIndcs):
         Whether to use use the same indices for all elements in the batch.
     """
 
-    def __init__(self,
-                 min_nnz=.1,
-                 max_nnz=.5,
-                 is_batch_share=False):
-        super().__init__(min_n_indcs=min_nnz,
-                         max_n_indcs=max_nnz,
-                         is_batch_share=is_batch_share)
+    def __init__(self, min_nnz=0.1, max_nnz=0.5, is_batch_share=False):
+        super().__init__(min_n_indcs=min_nnz, max_n_indcs=max_nnz, is_batch_share=is_batch_share)
 
     def __call__(self, batch_size, mask_shape, **kwargs):
         n_possible_points = prod(mask_shape)
@@ -225,10 +224,10 @@ class RandomMasker(GetRandomIndcs):
 
         if self.is_batch_share:
             # share memory
-            mask = torch.zeros(n_possible_points).byte()
+            mask = torch.zeros(n_possible_points).bool()
             mask = mask.unsqueeze(0).expand(batch_size, n_possible_points)
         else:
-            mask = torch.zeros((batch_size, n_possible_points)).byte()
+            mask = torch.zeros((batch_size, n_possible_points)).bool()
 
         mask.scatter_(1, nnz_indcs, 1)
         mask = mask.view(batch_size, *mask_shape, 1).contiguous()
@@ -262,7 +261,7 @@ def not_masks(mask, not_mask):
 
 def half_masker(batch_size, mask_shape, dim=0):
     """Return a mask which masks the top half features of `dim`."""
-    mask = torch.zeros(mask_shape).byte()
+    mask = torch.zeros(mask_shape).bool()
     slcs = [slice(None)] * (len(mask_shape))
     slcs[dim] = slice(0, mask_shape[dim] // 2)
     mask[slcs] = 1
@@ -272,7 +271,7 @@ def half_masker(batch_size, mask_shape, dim=0):
 
 def no_masker(batch_size, mask_shape):
     """Return a mask of all 1."""
-    mask = torch.ones(1).byte()
+    mask = torch.ones(1).bool()
     # share memory
     return mask.expand(batch_size, *mask_shape, 1)
 
@@ -293,20 +292,12 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
         Additional arguments to `CntxtTrgtGetter`.
     """
 
-    def __init__(self,
-                 context_masker=RandomMasker(),
-                 target_masker=no_masker,
-                 **kwargs):
-        super().__init__(contexts_getter=context_masker,
-                         targets_getter=target_masker,
-                         **kwargs)
+    def __init__(self, context_masker=RandomMasker(), target_masker=no_masker, **kwargs):
+        super().__init__(contexts_getter=context_masker, targets_getter=target_masker, **kwargs)
 
-    def __call__(self, X,
-                 y=None,
-                 context_mask=None,
-                 target_mask=None,
-                 is_return_masks=False,
-                 **kwargs):
+    def __call__(
+        self, X, y=None, context_mask=None, target_mask=None, is_return_masks=False, **kwargs
+    ):
         """
         Parameters
         ----------
@@ -319,12 +310,12 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
         y: None
             Placeholder
 
-        context_mask : torch.ByteTensor, size=[batch_size, *grid_shape]
+        context_mask : torch.BoolTensor, size=[batch_size, *grid_shape]
             Binary mask indicating the context. Number of non zero should
             be same for all batch. If `None` generates it using
             `context_masker(batch_size, mask_shape)`.
 
-        target_mask : torch.ByteTensor, size=[batch_size, *grid_shape]
+        target_mask : torch.BoolTensor, size=[batch_size, *grid_shape]
             Binary mask indicating the targets. Number of non zero should
             be same for all batch. If `None` generates it using
             `target_masker(batch_size, mask_shape)`.
@@ -334,11 +325,13 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
             than the selected `X_cntxt, Y_cntxt, X_trgt, Y_trgt`.
         """
         # parent function assumes y_dim is last rank
-        return super().__call__(channels_to_last_dim(X),
-                                context_indcs=context_mask,
-                                target_indcs=target_mask,
-                                is_return_indcs=is_return_masks,
-                                **kwargs)
+        return super().__call__(
+            channels_to_last_dim(X),
+            context_indcs=context_mask,
+            target_indcs=target_mask,
+            is_return_indcs=is_return_masks,
+            **kwargs
+        )
 
     def add_cntxts_to_trgts(self, grid_shape, target_mask, context_mask):
         """Add context points to targets: has been shown emperically better."""

@@ -155,7 +155,7 @@ class NeuralProcess(nn.Module):
         is_use_x=True,
         pred_loc_transformer=nn.Identity(),
         pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt),
-        get_gen_autoregressive_trgts=GenNextAutoregressivePixelL1,
+        get_gen_autoregressive_trgts=GenNextAutoregressivePixelL1(3),
         n_autoregressive_steps=0,
     ):
         super().__init__()
@@ -751,7 +751,7 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
         return out
 
     def pseudo_to_out(self, _, __, pseudo_values):
-        """Return the pseudo values a they are on the same grid as the querries."""
+        """Return the pseudo values a they are on the same grid as the queries."""
         return pseudo_values
 
     def make_dec_inp(self, X, _, mask_target):
@@ -786,7 +786,7 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
                 std_y_pred = p_y_pred.base_dist.scale
                 std_y_pred = std_y_pred.view(-1, std_y_pred.size(-1)).mean(-1, keepdim=True)
                 # initial std could be very large => make sure not saturating sigmoid (*0.1)
-                cur_mask_trgt[cur_mask_trgt.byte()] = self.std_to_conf(std_y_pred * 0.1).squeeze(
+                cur_mask_trgt[cur_mask_trgt.bool()] = self.std_to_conf(std_y_pred * 0.1).squeeze(
                     -1
                 )  # DEV MODE
 

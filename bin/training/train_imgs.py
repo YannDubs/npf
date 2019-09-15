@@ -32,7 +32,7 @@ from neuralproc.utils.helpers import (
 )
 
 from utils.train import train_models
-from utils.data import get_dataset
+from utils.data import get_dataset, get_img_size
 from utils.data.helpers import train_dev_split
 from utils.data.dataloader import cntxt_trgt_collate
 
@@ -116,7 +116,7 @@ def get_model(
         + (1 - min_sigma) * F.softplus(scale_trgt),
     )
 
-    dflt_kernel_size = img_shape // 5
+    dflt_kernel_size = img_shape[-1] // 5  # currently assumes square images
     if dflt_kernel_size % 2 == 0:
         dflt_kernel_size -= 1  # make sure odd
 
@@ -221,7 +221,7 @@ def train(models, train_datasets, **kwargs):
 def main(args):
 
     # DATA
-    train_datasets, test_datasets = get_train_test_dataset(args.datasets)
+    train_dataset, test_dataset = get_train_test_dataset(args.dataset)
 
     model = get_model(
         args.model,
@@ -229,8 +229,7 @@ def main(args):
         n_blocks=args.n_blocks,
         init_kernel_size=args.init_kernel_size,
         kernel_size=args.kernel_size,
-        batch_size=args.batch_size,
-        lr=args.lr,
+        img_shape=get_img_size(args.dataset),
         no_batchnorm=args.no_batchnorm,
     )
 
@@ -239,8 +238,8 @@ def main(args):
     # TRAINING
     train(
         {args.name: model},
-        train_datasets,
-        test_datasets=test_datasets,
+        {args.dataset: train_dataset},
+        test_datasets={args.dataset: test_dataset},
         models_kwargs={args.name: model_kwargs},
         callbacks=[ProgressBar()] if args.is_progressbar else [],
         runs=args.runs,
@@ -258,9 +257,9 @@ def parse_arguments(args_to_parse):
         choices=["AttnCNP", "SelfAttnCNP", "GridedCCP", "GridedUnetCCP", "GridedSharedUnetCCP"],
     )
     parser.add_argument(
-        "datasets",
+        "dataset",
         type=str,
-        help="Datasets.",
+        help="Dataset.",
         choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
     )
 

@@ -37,7 +37,7 @@ def indep_shuffle_(a, axis=-1):
     """
     Shuffle `a` in-place along the given axis.
 
-    Apply numpy.random.shuffle to the given axis of `a`.
+    Apply `numpy.random.shuffle` to the given axis of `a`.
     Each one-dimensional slice is shuffled independently.
 
     Credits : https://github.com/numpy/numpy/issues/5173
@@ -83,21 +83,25 @@ def MultivariateNormalDiag(loc, scale_diag):
     return Independent(Normal(loc, scale_diag), 1)
 
 
-def clamp(x,
-          minimum=-float("Inf"),
-          maximum=float("Inf"),
-          is_leaky=False,
-          negative_slope=0.01,
-          hard_min=None,
-          hard_max=None):
+def clamp(
+    x,
+    minimum=-float("Inf"),
+    maximum=float("Inf"),
+    is_leaky=False,
+    negative_slope=0.01,
+    hard_min=None,
+    hard_max=None,
+):
     """
     Clamps a tensor to the given [minimum, maximum] (leaky) bound, with
     an optional hard clamping.
     """
-    lower_bound = ((minimum + negative_slope * (x - minimum))
-                   if is_leaky else torch.zeros_like(x) + minimum)
-    upper_bound = ((maximum + negative_slope * (x - maximum))
-                   if is_leaky else torch.zeros_like(x) + maximum)
+    lower_bound = (
+        (minimum + negative_slope * (x - minimum)) if is_leaky else torch.zeros_like(x) + minimum
+    )
+    upper_bound = (
+        (maximum + negative_slope * (x - maximum)) if is_leaky else torch.zeros_like(x) + maximum
+    )
     clamped = torch.max(lower_bound, torch.min(x, upper_bound))
 
     if hard_min is not None or hard_max is not None:
@@ -160,18 +164,19 @@ class ProbabilityConverter(nn.Module):
         care of the boundaries (e.g. leaky relu  or relu).
     """
 
-    def __init__(self,
-                 min_p=0.,
-                 activation="sigmoid",
-                 is_train_temperature=False,
-                 is_train_bias=False,
-                 trainable_dim=1,
-                 initial_temperature=1.0,
-                 initial_probability=0.5,
-                 initial_x=0,
-                 bias_transformer=nn.Identity(),
-                 temperature_transformer=nn.Identity()
-                 ):
+    def __init__(
+        self,
+        min_p=0.0,
+        activation="sigmoid",
+        is_train_temperature=False,
+        is_train_bias=False,
+        trainable_dim=1,
+        initial_temperature=1.0,
+        initial_probability=0.5,
+        initial_x=0,
+        bias_transformer=nn.Identity(),
+        temperature_transformer=nn.Identity(),
+    ):
 
         super().__init__()
         self.min_p = min_p
@@ -192,8 +197,9 @@ class ProbabilityConverter(nn.Module):
         if self.is_train_temperature:
             self.temperature = nn.Parameter(self.temperature)
 
-        initial_bias = self._probability_to_bias(self.initial_probability,
-                                                 initial_x=self.initial_x)
+        initial_bias = self._probability_to_bias(
+            self.initial_probability, initial_x=self.initial_x
+        )
 
         self.bias = torch.tensor([initial_bias] * self.trainable_dim)
         if self.is_train_bias:
@@ -214,11 +220,17 @@ class ProbabilityConverter(nn.Module):
             y = 0.2 * ((x + bias) * temperature) + 0.5
 
             if self.activation == "leaky-hard-sigmoid":
-                full_p = clamp(y, minimum=0.1, maximum=0.9,
-                               is_leaky=True, negative_slope=0.01,
-                               hard_min=0, hard_max=0)
+                full_p = clamp(
+                    y,
+                    minimum=0.1,
+                    maximum=0.9,
+                    is_leaky=True,
+                    negative_slope=0.01,
+                    hard_min=0,
+                    hard_max=0,
+                )
             elif self.activation == "hard-sigmoid":
-                full_p = clamp(y, minimum=0., maximum=1., is_leaky=False)
+                full_p = clamp(y, minimum=0.0, maximum=1.0, is_leaky=False)
 
         else:
             raise ValueError("Unkown activation : {}".format(self.activation))
@@ -245,15 +257,25 @@ class ProbabilityConverter(nn.Module):
 
 def make_abs_conv(Conv):
     """Make a convolution have only positive parameters."""
+
     class AbsConv(Conv):
         def forward(self, input):
-            return F.conv2d(input, self.weight.abs(), self.bias, self.stride,
-                            self.padding, self.dilation, self.groups)
+            return F.conv2d(
+                input,
+                self.weight.abs(),
+                self.bias,
+                self.stride,
+                self.padding,
+                self.dilation,
+                self.groups,
+            )
+
     return AbsConv
 
 
 def make_depth_sep_conv(Conv):
     """Make a convolution module depth separable."""
+
     class DepthSepConv(nn.Module):
         """Make a convolution depth separable.
 
@@ -271,11 +293,13 @@ def make_depth_sep_conv(Conv):
             Additional arguments to `Conv`
         """
 
-        def __init__(self, in_channels, out_channels, kernel_size,
-                     confidence=False, bias=True, **kwargs):
+        def __init__(
+            self, in_channels, out_channels, kernel_size, confidence=False, bias=True, **kwargs
+        ):
             super().__init__()
-            self.depthwise = Conv(in_channels, in_channels, kernel_size,
-                                  groups=in_channels, bias=bias, **kwargs)
+            self.depthwise = Conv(
+                in_channels, in_channels, kernel_size, groups=in_channels, bias=bias, **kwargs
+            )
             self.pointwise = Conv(in_channels, out_channels, 1, bias=bias)
             self.reset_parameters()
 
@@ -292,6 +316,7 @@ def make_depth_sep_conv(Conv):
 
 class BackwardPDB(torch.autograd.Function):
     """Run PDB in the backward pass."""
+
     @staticmethod
     def forward(ctx, input, name="debugger"):
         ctx.name = name
@@ -303,6 +328,7 @@ class BackwardPDB(torch.autograd.Function):
         input, = ctx.saved_tensors
         if not torch.isfinite(grad_output).all() or not torch.isfinite(input).all():
             import pdb
+
             pdb.set_trace()
         return grad_output, None  # 2 args so return None for `name`
 

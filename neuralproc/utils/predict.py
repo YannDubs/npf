@@ -26,7 +26,7 @@ class GenNextAutoregressivePixelL1:
     def __call__(self, mask_cntxt):
         """
         Given the current context mask, return the next
-        temporary target mask by setting all pixels than are at d manhatan distance
+        temporary target mask by setting all pixels than are at d manhattan distance
         of a context pixel.
         """
         next_mask_cntxt = mask_cntxt.clone()
@@ -34,10 +34,9 @@ class GenNextAutoregressivePixelL1:
 
         while not (next_mask_cntxt == 1).all():
             for _ in range(self.d):
-                # shift array to the 4 directions to get all neighbours
+                # shift array to the 4 directions to get all neighbors
                 right, left, up, down = self.get_shifted_masks(next_mask_cntxt)
-                # set all neigbours to 1 by summing + make sure nothing over 1
-                next_mask_cntxt = torch.clamp(right + left + up + down + next_mask_cntxt, 0, 1)
+                next_mask_cntxt = right | left | up | down | next_mask_cntxt
             yield next_mask_cntxt.clone()
 
     def get_shifted_masks(self, mask):
@@ -60,7 +59,7 @@ class AutoregressivePredictor:
         Model used to initialize `MeanPredictor`.
 
     gen_autoregressive_trgts : callable, optional
-        Function which returns a generator of the next mask target given the inital
+        Function which returns a generator of the next mask target given the initial
         mask context `get_next_tgrts(mask_cntxt)`.
 
     is_repredict : bool, optional
@@ -68,9 +67,9 @@ class AutoregressivePredictor:
         each autoregressive temporary steps.
     """
 
-    def __init__(self, model,
-                 gen_autoregressive_trgts=GenNextAutoregressivePixelL1(1),
-                 is_repredict=False):
+    def __init__(
+        self, model, gen_autoregressive_trgts=GenNextAutoregressivePixelL1(1), is_repredict=False
+    ):
         self.predictor = VanillaPredictor(model)
         self.gen_autoregressive_trgts = gen_autoregressive_trgts
         self.is_repredict = is_repredict
