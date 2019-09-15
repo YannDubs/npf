@@ -20,25 +20,28 @@ __all__ = ["train_models"]
 EVAL_FILENAME = "eval.csv"
 
 
-def train_models(datasets, models, criterion,
-                 test_datasets=dict(),
-                 chckpnt_dirname=None,
-                 is_retrain=False,
-                 runs=1,
-                 starting_run=0,
-                 train_split=skorch.dataset.CVSplit(0.1),
-                 device=None,
-                 max_epochs=100,
-                 batch_size=64,
-                 lr=1e-3,
-                 optimizer=Adam,
-                 callbacks=[ProgressBar()],
-                 patience=None,
-                 seed=None,
-                 datasets_kwargs=dict(),
-                 models_kwargs=dict(),
-                 **kwargs
-                 ):
+def train_models(
+    datasets,
+    models,
+    criterion,
+    test_datasets=dict(),
+    chckpnt_dirname=None,
+    is_retrain=False,
+    runs=1,
+    starting_run=0,
+    train_split=skorch.dataset.CVSplit(0.1),
+    device=None,
+    max_epochs=100,
+    batch_size=64,
+    lr=1e-3,
+    optimizer=Adam,
+    callbacks=[ProgressBar()],
+    patience=None,
+    seed=None,
+    datasets_kwargs=dict(),
+    models_kwargs=dict(),
+    **kwargs
+):
     """
     Train or loads the models.
 
@@ -114,10 +117,10 @@ def train_models(datasets, models, criterion,
         differ a little).
 
     datasets_kwargs : dict, optional
-        Dictionary of datasets specfifc kwargs.
+        Dictionary of datasets specific kwargs.
 
     models_kwargs : dict, optional
-        Dictionary of model specfifc kwargs.
+        Dictionary of model specific kwargs.
 
     kwargs :
         Additional arguments to `NeuralNet`.
@@ -165,25 +168,28 @@ def train_models(datasets, models, criterion,
                 if chckpnt_dirname is not None:
                     chckpnt_dirname = init_chckpnt_dirname + suffix
                     test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
-                    chckpt = Checkpoint(dirname=chckpnt_dirname,
-                                        monitor='valid_loss_best')
+                    chckpt = Checkpoint(dirname=chckpnt_dirname, monitor="valid_loss_best")
                     callbacks.append(chckpt)
 
                 if patience is not None:
                     callbacks.append(EarlyStopping(patience=patience))
 
                 if seed is not None:
-                    # make sure that the seed changes acrosss runs
+                    # make sure that the seed changes across runs
                     callbacks.append(FixRandomSeed(seed + run))
 
-                kwargs.update(dict(train_split=train_split,
-                                   warm_start=True,  # continue training
-                                   callbacks=callbacks,
-                                   device=device,
-                                   optimizer=optimizer,
-                                   lr=lr,
-                                   max_epochs=max_epochs,
-                                   batch_size=batch_size))
+                kwargs.update(
+                    dict(
+                        train_split=train_split,
+                        warm_start=True,  # continue training
+                        callbacks=callbacks,
+                        device=device,
+                        optimizer=optimizer,
+                        lr=lr,
+                        max_epochs=max_epochs,
+                        batch_size=batch_size,
+                    )
+                )
 
                 current_kwargs = kwargs.copy()
                 current_kwargs.update(datasets_kwargs.get(data_name, dict()))
@@ -200,19 +206,26 @@ def train_models(datasets, models, criterion,
 
                 # return the training rather than testing history as dflt
                 history = deepcopy(trainer.history)
-                test_loglike = _eval_save_load(trainer, data_test, test_eval_file,
-                                               is_force_rerun=is_retrain)
+                test_loglike = _eval_save_load(
+                    trainer, data_test, test_eval_file, is_force_rerun=is_retrain
+                )
                 trainer.test_history = deepcopy(trainer.history)
                 trainer.history = history
 
                 valid_loss, best_epoch = _best_loss(trainer, suffix, mode="valid")
                 train_loss, _ = _best_loss(trainer, suffix, mode="train")
 
-                print(suffix,
-                      "| best epoch:", best_epoch,
-                      "| train loss:", round_decimals(train_loss, n=4),
-                      "| valid loss:", round_decimals(valid_loss, n=4),
-                      "| test log likelihood:", round_decimals(test_loglike, n=4))
+                print(
+                    suffix,
+                    "| best epoch:",
+                    best_epoch,
+                    "| train loss:",
+                    round_decimals(train_loss, n=4),
+                    "| valid loss:",
+                    round_decimals(valid_loss, n=4),
+                    "| test log likelihood:",
+                    round_decimals(test_loglike, n=4),
+                )
 
                 trainer.module_.cpu()  # make sure on cpu
                 torch.cuda.empty_cache()  # empty cache for next run

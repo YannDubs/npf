@@ -20,21 +20,22 @@ from utils.helpers import set_seed
 from .helpers import random_translation, preprocess
 
 DIR = os.path.abspath(os.path.dirname(__file__))
-COLOUR_BLACK = torch.tensor([0., 0., 0.])
-COLOUR_WHITE = torch.tensor([1., 1., 1.])
-COLOUR_BLUE = torch.tensor([0., 0., 1.])
-DATASETS_DICT = {"mnist": "MNIST",
-                 "svhn": "SVHN",
-                 "celeba32": "CelebA32",
-                 "celeba64": "CelebA64",
-                 "zs-multi-mnist": "ZeroShotMultiMNIST"}
+COLOUR_BLACK = torch.tensor([0.0, 0.0, 0.0])
+COLOUR_WHITE = torch.tensor([1.0, 1.0, 1.0])
+COLOUR_BLUE = torch.tensor([0.0, 0.0, 1.0])
+DATASETS_DICT = {
+    "mnist": "MNIST",
+    "svhn": "SVHN",
+    "celeba32": "CelebA32",
+    "celeba64": "CelebA64",
+    "zs-multi-mnist": "ZeroShotMultiMNIST",
+}
 DATASETS = list(DATASETS_DICT.keys())
 
 
 # HELPERS
-
 def get_dataset(dataset):
-    """Return the correct dataset."""
+    """Return the correct uninstantiated datasets."""
     dataset = dataset.lower()
     try:
         # eval because stores name as string in order to put it at top of file
@@ -75,29 +76,35 @@ class SVHN(datasets.SVHN):
         (2018). Realistic evaluation of deep semi-supervised learning algorithms.
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
+
     shape = (3, 32, 32)
     missing_px_color = COLOUR_BLACK
     n_classes = 10
 
-    def __init__(self,
-                 root=os.path.join(DIR, '../../data/SVHN'),
-                 split="train",
-                 logger=logging.getLogger(__name__),
-                 **kwargs):
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/SVHN"),
+        split="train",
+        logger=logging.getLogger(__name__),
+        **kwargs
+    ):
 
         if split == "train":
             transforms_list = [  # transforms.Lambda(lambda x: random_translation(x, 2)),
-                transforms.ToTensor()]
+                transforms.ToTensor()
+            ]
         elif split == "test":
             transforms_list = [transforms.ToTensor()]
         else:
             raise ValueError("Unkown `split = {}`".format(split))
 
-        super().__init__(root,
-                         split=split,
-                         download=True,
-                         transform=transforms.Compose(transforms_list),
-                         **kwargs)
+        super().__init__(
+            root,
+            split=split,
+            download=True,
+            transform=transforms.Compose(transforms_list),
+            **kwargs
+        )
 
         self.labels = to_numpy(self.labels)
 
@@ -125,30 +132,33 @@ class MNIST(datasets.MNIST):
     kwargs:
         Additional arguments to `datasets.MNIST`.
     """
+
     shape = (1, 32, 32)
     n_classes = 10
     missing_px_color = COLOUR_BLUE
 
-    def __init__(self,
-                 root=os.path.join(DIR, '../../data/MNIST'),
-                 split="train",
-                 logger=logging.getLogger(__name__),
-                 **kwargs):
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/MNIST"),
+        split="train",
+        logger=logging.getLogger(__name__),
+        **kwargs
+    ):
 
         if split == "train":
-            transforms_list = [transforms.Resize(32),
-                               transforms.ToTensor()]
+            transforms_list = [transforms.Resize(32), transforms.ToTensor()]
         elif split == "test":
-            transforms_list = [transforms.Resize(32),
-                               transforms.ToTensor()]
+            transforms_list = [transforms.Resize(32), transforms.ToTensor()]
         else:
             raise ValueError("Unkown `split = {}`".format(split))
 
-        super().__init__(root,
-                         train=split == "train",
-                         download=True,
-                         transform=transforms.Compose(transforms_list),
-                         **kwargs)
+        super().__init__(
+            root,
+            train=split == "train",
+            download=True,
+            transform=transforms.Compose(transforms_list),
+            **kwargs
+        )
 
         self.targets = to_numpy(self.targets)
 
@@ -183,21 +193,23 @@ class ZeroShotMultiMNIST(Dataset):
     kwargs:
         Additional arguments to the dataset data generation process `make_multi_mnist_*`.
     """
+
     missing_px_color = COLOUR_BLUE
     n_classes = 0
     shape = (1, 56, 56)
-    files = {"train": "train",
-             "test": "test"}
+    files = {"train": "train", "test": "test"}
 
-    def __init__(self,
-                 root=os.path.join(DIR, '../../data/ZeroShotMultiMNIST'),
-                 transforms_list=[],
-                 split="train",
-                 n_test_digits=2,
-                 final_size=None,
-                 seed=123,
-                 logger=logging.getLogger(__name__),
-                 **kwargs):
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/ZeroShotMultiMNIST"),
+        transforms_list=[],
+        split="train",
+        n_test_digits=2,
+        final_size=None,
+        seed=123,
+        logger=logging.getLogger(__name__),
+        **kwargs
+    ):
 
         self.root = root
         self.transforms = transforms.Compose(transforms_list)
@@ -207,16 +219,18 @@ class ZeroShotMultiMNIST(Dataset):
         self.final_size = final_size
         self._init_size = 28
 
-        saved_data = os.path.join(root, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits))
+        saved_data = os.path.join(
+            root, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits)
+        )
 
         try:
             self.data = torch.load(saved_data)
         except FileNotFoundError:
             if not os.path.exists:
                 os.mkdir(root)
-            mnist = datasets.MNIST(root=os.path.join(self.root, os.path.pardir),
-                                   train=split == "train",
-                                   download=True)
+            mnist = datasets.MNIST(
+                root=os.path.join(self.root, os.path.pardir), train=split == "train", download=True
+            )
             self.logger.info("Generating ZeroShotMultiMNIST {} split.".format(split))
             if split == "train":
                 self.data = self.make_multi_mnist_train(mnist.data, **kwargs)
@@ -226,11 +240,14 @@ class ZeroShotMultiMNIST(Dataset):
             self.logger.info("Finished Generating.")
 
         self.logger.info("Resizing ZeroShotMultiMNIST ...")
-        self.data = (self.data.float() / 255)
+        self.data = self.data.float() / 255
         if self.final_size is not None:
-            self.data = torch.nn.functional.interpolate(self.data.unsqueeze(1).float(),
-                                                        size=self.final_size, mode='bilinear',
-                                                        align_corners=True).squeeze(1)
+            self.data = torch.nn.functional.interpolate(
+                self.data.unsqueeze(1).float(),
+                size=self.final_size,
+                mode="bilinear",
+                align_corners=True,
+            ).squeeze(1)
 
     def __len__(self):
         return self.data.size(0)
@@ -242,7 +259,7 @@ class ZeroShotMultiMNIST(Dataset):
         init_img_size = train_dataset.shape[1:]
         background = np.zeros((train_dataset.size(0), fin_img_size, fin_img_size)).astype(np.uint8)
         borders = (np.array((fin_img_size, fin_img_size)) - init_img_size) // 2
-        background[:, borders[0]:-borders[0], borders[1]:-borders[1]] = train_dataset
+        background[:, borders[0] : -borders[0], borders[1] : -borders[1]] = train_dataset
         return torch.from_numpy(background)
 
     def make_multi_mnist_test(self, test_dataset, varying_axis=None):
@@ -255,8 +272,8 @@ class ZeroShotMultiMNIST(Dataset):
         n_test = test_dataset.size(0)
 
         if varying_axis is None:
-            out_axis0 = self.make_multi_mnist_test(test_dataset[:n_test // 2], varying_axis=0)
-            out_axis1 = self.make_multi_mnist_test(test_dataset[:n_test // 2], varying_axis=1)
+            out_axis0 = self.make_multi_mnist_test(test_dataset[: n_test // 2], varying_axis=0)
+            out_axis1 = self.make_multi_mnist_test(test_dataset[: n_test // 2], varying_axis=1)
             return torch.cat((out_axis0, out_axis1), dim=0)[torch.randperm(n_test)]
 
         fin_img_size = self._init_size * self.n_test_digits
@@ -297,6 +314,7 @@ class ZeroShotMultiMNIST(Dataset):
         # no label so return 0 (note that can't return None because)
         # dataloaders requires so
         return img, 0
+
 
 # EXTERNAL DATASETS
 
@@ -369,31 +387,32 @@ class CelebA64(ExternalDataset):
         on computer vision (pp. 3730-3738).
 
     """
+
     urls = {"train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"}
     files = {"train": "img_align_celeba"}
     shape = (3, 64, 64)
     missing_px_color = COLOUR_BLACK
     n_classes = 0  # not classification
 
-    def __init__(self, root=os.path.join(DIR, '../../data/celeba64'), **kwargs):
+    def __init__(self, root=os.path.join(DIR, "../../data/celeba64"), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
-        self.imgs = glob.glob(self.train_data + '/*')
+        self.imgs = glob.glob(self.train_data + "/*")
 
     def download(self):
         """Download the dataset."""
-        save_path = os.path.join(self.root, 'celeba.zip')
+        save_path = os.path.join(self.root, "celeba.zip")
         os.makedirs(self.root)
 
         try:
-            subprocess.check_call(["curl", "-L", type(self).urls["train"],
-                                   "--output", save_path])
+            subprocess.check_call(["curl", "-L", type(self).urls["train"], "--output", save_path])
         except FileNotFoundError as e:
             raise Exception(e + " Please instal curl with `apt-get install curl`...")
 
-        hash_code = '00d2c5bc6d35e252742224ab0c1e8fcb'
-        assert hashlib.md5(open(save_path, 'rb').read()).hexdigest() == hash_code, \
-            '{} file is corrupted.  Remove the file and try again.'.format(save_path)
+        hash_code = "00d2c5bc6d35e252742224ab0c1e8fcb"
+        assert (
+            hashlib.md5(open(save_path, "rb").read()).hexdigest() == hash_code
+        ), "{} file is corrupted.  Remove the file and try again.".format(save_path)
 
         with zipfile.ZipFile(save_path) as zf:
             self.logger.info("Extracting CelebA ...")
@@ -430,7 +449,8 @@ class CelebA64(ExternalDataset):
 class CelebA32(CelebA64):
     shape = (3, 32, 32)
 
-    def __init__(self, root=os.path.join(DIR, '../../data/celeba32'), **kwargs):
+    def __init__(self, root=os.path.join(DIR, "../../data/celeba32"), **kwargs):
         super().__init__(root, *kwargs)
 
-        self.imgs = glob.glob(self.train_data + '/*')
+        self.imgs = glob.glob(self.train_data + "/*")
+
