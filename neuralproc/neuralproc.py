@@ -155,7 +155,7 @@ class NeuralProcess(nn.Module):
         is_use_x=True,
         pred_loc_transformer=nn.Identity(),
         pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt),
-        get_gen_autoregressive_trgts=get_next_autoregressive_closest_pixels,
+        get_gen_autoregressive_trgts=GenNextAutoregressivePixelL1,
         n_autoregressive_steps=0,
     ):
         super().__init__()

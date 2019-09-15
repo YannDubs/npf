@@ -55,7 +55,8 @@ def add_y_dim(models, datasets):
     }
 
 
-def _get_dflt_train_kwargs(model_name, **kwargs):
+def _get_train_kwargs(model_name, **kwargs):
+    """Return the model specific kwargs."""
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     get_cntxt_trgt = GridCntxtTrgtGetter(
@@ -103,6 +104,7 @@ def _get_dflt_train_kwargs(model_name, **kwargs):
 def get_model(
     model_name, min_sigma, n_blocks, init_kernel_size, kernel_size, img_shape, no_batchnorm
 ):
+    """Return the correct model."""
 
     # PARAMETERS
     x_dim = 2
@@ -202,6 +204,7 @@ def get_train_test_dataset(dataset):
 
 
 def train(models, train_datasets, **kwargs):
+    """Train the model."""
     _ = train_models(
         train_datasets,
         add_y_dim(models, train_datasets),
@@ -231,9 +234,7 @@ def main(args):
         no_batchnorm=args.no_batchnorm,
     )
 
-    model_kwargs = _get_dflt_train_kwargs(
-        args.model, **dict(lr=args.lr, batch_size=args.batch_size)
-    )
+    model_kwargs = _get_train_kwargs(args.model, **dict(lr=args.lr, batch_size=args.batch_size))
 
     # TRAINING
     train(
@@ -251,54 +252,54 @@ def main(args):
 def parse_arguments(args_to_parse):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-m",
-        "--model",
+        "model",
         type=str,
         help="Model.",
         choices=["AttnCNP", "SelfAttnCNP", "GridedCCP", "GridedUnetCCP", "GridedSharedUnetCCP"],
-        required=True,
     )
     parser.add_argument(
-        "-d",
-        "--datasets",
-        nargs="+",
+        "datasets",
         type=str,
         help="Datasets.",
         choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
-        required=True,
     )
-    parser.add_argument(
+
+    # General optional args
+    general = parser.add_argument_group("General Options")
+    general.add_argument(
         "--name",
         type=str,
         help="Name of the model for saving. By default parameter from `--model`.",
     )
-    parser.add_argument("--lr", type=float, help="Learning rate.")
-    parser.add_argument("--batch-size", type=int, help="Batch size.")
-    parser.add_argument("--max-epochs", default=100, type=int, help="Max number of epochs.")
-    parser.add_argument("--runs", default=1, type=int, help="Number of runs.")
-    parser.add_argument(
+    general.add_argument("--lr", type=float, help="Learning rate.")
+    general.add_argument("--batch-size", type=int, help="Batch size.")
+    general.add_argument("--max-epochs", default=100, type=int, help="Max number of epochs.")
+    general.add_argument("--runs", default=1, type=int, help="Number of runs.")
+    general.add_argument(
         "--starting-run",
         default=0,
         type=int,
         help="Starting run. This is useful if a couple of runs have already been trained, and you want to continue from there.",
     )
-    parser.add_argument(
+    general.add_argument(
         "--min-sigma",
         default=0.1,
         type=float,
         help="Lowest bound on the std that the model can predict.",
     )
-    parser.add_argument(
+    general.add_argument(
         "--is-progressbar", action="store_true", help="Whether to use a progressbar."
     )
 
-    # General options
+    # CCP options
     ccp = parser.add_argument_group("CCP Options")
     ccp.add_argument("--n-blocks", default=5, type=int, help="Number of blocks to use in the CNN.")
     ccp.add_argument("--init-kernel-size", type=int, help="Kernel size to use for the set cnn.")
     ccp.add_argument("--kernel-size", type=int, help="Kernel size to use for the whole CNN.")
     ccp.add_argument(
-        "--no-batchnorm", action="store_true", help="Whether to remove batchnorm when training CCP."
+        "--no-batchnorm",
+        action="store_true",
+        help="Whether to remove batchnorm when training CCP.",
     )
     ccp.add_argument(
         "--is-receptivefield",
