@@ -1,10 +1,11 @@
+import warnings
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import (make_depth_sep_conv, channels_to_2nd_dim,
-                                      channels_to_last_dim)
+from neuralproc.utils.helpers import make_depth_sep_conv, channels_to_2nd_dim, channels_to_last_dim
 
 __all__ = ["ConvBlock", "ResNormalizedConvBlock", "ResConvBlock", "CNN", "UnetCNN"]
 
@@ -55,20 +56,27 @@ class ConvBlock(nn.Module):
         and pattern recognition (pp. 1251-1258).
     """
 
-    def __init__(self, in_chan, out_chan, Conv,
-                 kernel_size=5,
-                 dilation=1,
-                 padding=-1,
-                 activation=nn.ReLU(),
-                 Normalization=nn.Identity,
-                 **kwargs):
+    def __init__(
+        self,
+        in_chan,
+        out_chan,
+        Conv,
+        kernel_size=5,
+        dilation=1,
+        padding=-1,
+        activation=nn.ReLU(),
+        Normalization=nn.Identity,
+        **kwargs
+    ):
         super().__init__()
         self.activation = activation
 
         if padding == -1:
             padding = (kernel_size // 2) * dilation
             if kwargs.get("stride", 1) != 1:
-                warnings.warn("`padding == -1` but `stride != 1`. The output might be of different dimension as the input depending on other hyperparameters.")
+                warnings.warn(
+                    "`padding == -1` but `stride != 1`. The output might be of different dimension as the input depending on other hyperparameters."
+                )
 
         Conv = make_depth_sep_conv(Conv)
 
@@ -122,26 +130,32 @@ class ResConvBlock(nn.Module):
         and pattern recognition (pp. 1251-1258).
     """
 
-    def __init__(self, in_chan, out_chan, Conv,
-                 kernel_size=5,
-                 activation=nn.ReLU(),
-                 Normalization=nn.Identity,
-                 is_bias=True):
+    def __init__(
+        self,
+        in_chan,
+        out_chan,
+        Conv,
+        kernel_size=5,
+        activation=nn.ReLU(),
+        Normalization=nn.Identity,
+        is_bias=True,
+    ):
         super().__init__()
         self.activation = activation
 
         if kernel_size % 2 == 0:
             raise ValueError("`kernel_size={}`, but should be odd.".format(kernel_size))
 
-        padding = (kernel_size // 2)
+        padding = kernel_size // 2
 
         self.norm1 = Normalization(in_chan)
-        self.conv1 = make_depth_sep_conv(Conv)(in_chan, in_chan, kernel_size,
-                                               padding=padding,
-                                               bias=is_bias)
+        self.conv1 = make_depth_sep_conv(Conv)(
+            in_chan, in_chan, kernel_size, padding=padding, bias=is_bias
+        )
         self.norm2 = Normalization(in_chan)
-        self.conv2_depthwise = Conv(in_chan, in_chan, kernel_size,
-                                    padding=padding, groups=in_chan, bias=is_bias)
+        self.conv2_depthwise = Conv(
+            in_chan, in_chan, kernel_size, padding=padding, groups=in_chan, bias=is_bias
+        )
         self.conv2_pointwise = Conv(in_chan, out_chan, 1, bias=is_bias)
 
         self.reset_parameters()
@@ -188,21 +202,22 @@ class ResNormalizedConvBlock(ResConvBlock):
         Pattern Recognition (pp. 515-523). IEEE.
     """
 
-    def __init__(self, in_chan, out_chan, Conv,
-                 kernel_size=5,
-                 activation=nn.ReLU(),
-                 is_bias=True):
-        super().__init__(in_chan, out_chan, Conv,
-                         kernel_size=kernel_size,
-                         activation=activation,
-                         is_bias=is_bias,
-                         Normalization=nn.Identity)  # make sure no normalization
+    def __init__(self, in_chan, out_chan, Conv, kernel_size=5, activation=nn.ReLU(), is_bias=True):
+        super().__init__(
+            in_chan,
+            out_chan,
+            Conv,
+            kernel_size=kernel_size,
+            activation=activation,
+            is_bias=is_bias,
+            Normalization=nn.Identity,
+        )  # make sure no normalization
 
     def reset_parameters(self):
         weights_init(self)
-        self.bias = nn.Parameter(torch.tensor([0.]))
+        self.bias = nn.Parameter(torch.tensor([0.0]))
 
-        self.temperature = nn.Parameter(torch.tensor([0.]))
+        self.temperature = nn.Parameter(torch.tensor([0.0]))
         self.temperature = init_param_(self.temperature)
 
     def forward(self, X):
@@ -222,9 +237,7 @@ class ResNormalizedConvBlock(ResConvBlock):
         # adds residual before point wise => output can change number of channels
 
         # make sure that confidence cannot decrease and cannot be greater than 1
-        conf_2 = conf_1 + torch.sigmoid(density *
-                                        F.softplus(self.temperature) +
-                                        self.bias)
+        conf_2 = conf_1 + torch.sigmoid(density * F.softplus(self.temperature) + self.bias)
         conf_2 = conf_2.clamp(max=1)
         out = out + X
 
@@ -258,17 +271,15 @@ class CNN(nn.Module):
         Additional arguments to `ConvBlock`.
     """
 
-    def __init__(self, n_channels, ConvBlock,
-                 n_blocks=3,
-                 is_chan_last=False,
-                 **kwargs):
+    def __init__(self, n_channels, ConvBlock, n_blocks=3, is_chan_last=False, **kwargs):
 
         super().__init__()
         self.n_blocks = n_blocks
         self.is_chan_last = is_chan_last
         self.in_out_channels = self._get_in_out_channels(n_channels, n_blocks)
-        self.conv_blocks = nn.ModuleList([ConvBlock(in_chan, out_chan, **kwargs)
-                                          for in_chan, out_chan in self.in_out_channels])
+        self.conv_blocks = nn.ModuleList(
+            [ConvBlock(in_chan, out_chan, **kwargs) for in_chan, out_chan in self.in_out_channels]
+        )
         self.is_return_rep = False  # never return representation for vanilla conv
 
         self.reset_parameters()
@@ -282,7 +293,9 @@ class CNN(nn.Module):
             channel_list = [n_channels] * n_blocks
         else:
             channel_list = list(n_channels)
-            assert len(channel_list) == (n_blocks + 1), "{} != {}".format(len(channel_list), n_blocks + 1)
+            assert len(channel_list) == (n_blocks + 1), "{} != {}".format(
+                len(channel_list), n_blocks + 1
+            )
 
         return list(zip(channel_list, channel_list[1:]))
 
@@ -353,12 +366,18 @@ class UnetCNN(CNN):
         Medical image computing and computer-assisted intervention. Springer, Cham, 2015.
     """
 
-    def __init__(self, n_channels, ConvBlock, Pool, upsample_mode,
-                 max_nchannels=256,
-                 pooling_size=2,
-                 is_force_same_bottleneck=False,
-                 is_return_rep=False,
-                 **kwargs):
+    def __init__(
+        self,
+        n_channels,
+        ConvBlock,
+        Pool,
+        upsample_mode,
+        max_nchannels=256,
+        pooling_size=2,
+        is_force_same_bottleneck=False,
+        is_return_rep=False,
+        **kwargs
+    ):
 
         self.max_nchannels = max_nchannels
         super().__init__(n_channels, ConvBlock, **kwargs)
@@ -389,17 +408,16 @@ class UnetCNN(CNN):
             # of the same functions. Because bottleneck should be a global representation
             # => should not depend on the sample you chose
             batch_size = X.size(0)
-            batch_1 = X[:batch_size // 2, ...]
-            batch_2 = X[batch_size // 2:, ...]
+            batch_1 = X[: batch_size // 2, ...]
+            batch_2 = X[batch_size // 2 :, ...]
             X_mean = (batch_1 + batch_2) / 2
             X = torch.cat([X_mean, X_mean], dim=0)
 
         # Up
         for i in range(n_down_blocks + 1, self.n_blocks):
-            X = F.interpolate(X,
-                              mode=self.upsample_mode,
-                              scale_factor=self.pooling_size,
-                              align_corners=True)
+            X = F.interpolate(
+                X, mode=self.upsample_mode, scale_factor=self.pooling_size, align_corners=True
+            )
             X = torch.cat((X, residuals[n_down_blocks - i]), dim=1)  # concat on channels
             X = self.conv_blocks[i](X)
 
@@ -412,17 +430,21 @@ class UnetCNN(CNN):
 
         assert n_blocks % 2 == 1, "n_blocks={} not odd".format(n_blocks)
         # e.g. if n_channels=16, n_blocks=5: [16, 32, 64]
-        channel_list = [factor_chan**i * n_channels for i in range(n_blocks // 2 + 1)]
+        channel_list = [factor_chan ** i * n_channels for i in range(n_blocks // 2 + 1)]
         # e.g.: [16, 32, 64, 64, 32, 16]
         channel_list = channel_list + channel_list[::-1]
         # bound max number of channels by self.max_nchannels (besides first and
         # last dim as this is input / output cand sohould not be changed)
-        channel_list = channel_list[:1] + [min(c, self.max_nchannels) for c in channel_list[1:-1]
-                                           ] + channel_list[-1:]
+        channel_list = (
+            channel_list[:1]
+            + [min(c, self.max_nchannels) for c in channel_list[1:-1]]
+            + channel_list[-1:]
+        )
         # e.g.: [(16, 32), (32,64), (64, 64), (64, 32), (32, 16)]
         in_out_channels = super()._get_in_out_channels(channel_list, n_blocks)
         # e.g.: [(16, 32), (32,64), (64, 64), (128, 32), (64, 16)] due to concat
         idcs = slice(len(in_out_channels) // 2 + 1, len(in_out_channels))
-        in_out_channels[idcs] = [(in_chan * 2, out_chan)
-                                 for in_chan, out_chan in in_out_channels[idcs]]
+        in_out_channels[idcs] = [
+            (in_chan * 2, out_chan) for in_chan, out_chan in in_out_channels[idcs]
+        ]
         return in_out_channels

@@ -8,16 +8,17 @@ from torch.optim import Adam
 
 import skorch
 from skorch import NeuralNet
-from skorch.callbacks import ProgressBar, Checkpoint, EarlyStopping
+from skorch.callbacks import ProgressBar, Checkpoint, EarlyStopping, LoadInitState
 from skorch.helper import predefined_split
 
-from .helpers import FixRandomSeed
+from .helpers import FixRandomSeed, TrainLastCheckpoint
 from .evaluate import eval_loglike
 
 
 __all__ = ["train_models"]
 
 EVAL_FILENAME = "eval.csv"
+MOD_SUMM_FILENAME = "model_summary.txt"
 
 
 def train_models(
@@ -26,14 +27,15 @@ def train_models(
     criterion,
     test_datasets=dict(),
     chckpnt_dirname=None,
+    is_continue_train=False,
     is_retrain=False,
     runs=1,
     starting_run=0,
     train_split=skorch.dataset.CVSplit(0.1),
     device=None,
     max_epochs=100,
-    batch_size=64,
-    lr=1e-3,
+    batch_size=16,
+    lr=5e-4,
     optimizer=Adam,
     callbacks=[ProgressBar()],
     patience=None,
@@ -66,7 +68,10 @@ def train_models(
         in the checkpoint directory as `eval.csv`.
 
     chckpnt_dirname : str, optional
-        Directory where checkpoints will be saved.
+        Directory where checkpoints will be saved. The best as last model will be saved.
+
+    is_continue_train : bool, optional
+        Whether to continue training from the last checkpoint of the previous run. 
 
     is_retrain : bool, optional
         Whether to retrain the model. If not, `chckpnt_dirname` should be given
@@ -163,13 +168,22 @@ def train_models(
 
                 suffix = data_name + "/" + model_name + "/run_{}".format(run)
 
-                print("\n--- {} {} ---\n".format("Training" if is_retrain else "Loading", suffix))
+                print(
+                    "\n--- {} {} ---\n".format("Training" if is_retrain else "Loading", suffix),
+                    flush=True,
+                )
 
                 if chckpnt_dirname is not None:
                     chckpnt_dirname = init_chckpnt_dirname + suffix
                     test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
                     chckpt = Checkpoint(dirname=chckpnt_dirname, monitor="valid_loss_best")
-                    callbacks.append(chckpt)
+                    last_chckpt = TrainLastCheckpoint(dirname=chckpnt_dirname)
+                    callbacks.extend([chckpt, last_chckpt])
+
+                if is_continue_train:
+                    assert chckpnt_dirname is not None
+                    load_state = LoadInitState(last_chckpt)
+                    callbacks.append(load_state)
 
                 if patience is not None:
                     callbacks.append(EarlyStopping(patience=patience))
@@ -199,6 +213,8 @@ def train_models(
 
                 if is_retrain:
                     _ = trainer.fit(data_train)
+                    with open(os.path.join(chckpnt_dirname, MOD_SUMM_FILENAME), "w") as f:
+                        f.write(str(trainer.module_))
 
                 # load in all case => even when training loads the best checkpoint
                 trainer.initialize()
@@ -225,6 +241,7 @@ def train_models(
                     round_decimals(valid_loss, n=4),
                     "| test log likelihood:",
                     round_decimals(test_loglike, n=4),
+                    flush=True,
                 )
 
                 trainer.module_.cpu()  # make sure on cpu

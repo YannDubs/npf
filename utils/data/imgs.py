@@ -62,7 +62,7 @@ class SVHN(datasets.SVHN):
     Parameters
     ----------
     root : str, optional
-        Path to the dataset root. If `None` uses the default one.
+        Path to the dataset root. 
 
     split : {'train', 'test', "extra"}, optional
         According dataset is selected.
@@ -80,10 +80,11 @@ class SVHN(datasets.SVHN):
     shape = (3, 32, 32)
     missing_px_color = COLOUR_BLACK
     n_classes = 10
+    name = "SVHN"
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/SVHN"),
+        root=os.path.join(DIR, "../../data/"),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs
@@ -136,10 +137,11 @@ class MNIST(datasets.MNIST):
     shape = (1, 32, 32)
     n_classes = 10
     missing_px_color = COLOUR_BLUE
+    name = "MNIST"
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/MNIST"),
+        root=os.path.join(DIR, "../../data/"),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs
@@ -198,10 +200,11 @@ class ZeroShotMultiMNIST(Dataset):
     n_classes = 0
     shape = (1, 56, 56)
     files = {"train": "train", "test": "test"}
+    name = "ZeroShotMultiMNIST"
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/ZeroShotMultiMNIST"),
+        root=os.path.join(DIR, "../../data/"),
         transforms_list=[],
         split="train",
         n_test_digits=2,
@@ -211,7 +214,7 @@ class ZeroShotMultiMNIST(Dataset):
         **kwargs
     ):
 
-        self.root = root
+        self.dir = os.path.join(root, self.name)
         self.transforms = transforms.Compose(transforms_list)
         self.logger = logger
         self.n_test_digits = n_test_digits
@@ -220,17 +223,15 @@ class ZeroShotMultiMNIST(Dataset):
         self._init_size = 28
 
         saved_data = os.path.join(
-            root, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits)
+            self.dir, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits)
         )
 
         try:
             self.data = torch.load(saved_data)
         except FileNotFoundError:
             if not os.path.exists:
-                os.mkdir(root)
-            mnist = datasets.MNIST(
-                root=os.path.join(self.root, os.path.pardir), train=split == "train", download=True
-            )
+                os.mkdir(self.dir)
+            mnist = datasets.MNIST(root=root, train=split == "train", download=True)
             self.logger.info("Generating ZeroShotMultiMNIST {} split.".format(split))
             if split == "train":
                 self.data = self.make_multi_mnist_train(mnist.data, **kwargs)
@@ -332,12 +333,12 @@ class ExternalDataset(Dataset, abc.ABC):
     """
 
     def __init__(self, root, transforms_list=[], logger=logging.getLogger(__name__)):
-        self.root = root
+        self.dir = os.path.join(root, self.name)
         self.train_data = os.path.join(root, type(self).files["train"])
         self.transforms = transforms.Compose(transforms_list)
         self.logger = logger
 
-        if not os.path.isdir(root):
+        if not os.path.isdir(self.dir):
             self.logger.info("Downloading {} ...".format(str(type(self))))
             self.download()
             self.logger.info("Finished Downloading.")
@@ -393,16 +394,17 @@ class CelebA64(ExternalDataset):
     shape = (3, 64, 64)
     missing_px_color = COLOUR_BLACK
     n_classes = 0  # not classification
+    name = "celeba64"
 
-    def __init__(self, root=os.path.join(DIR, "../../data/celeba64"), **kwargs):
+    def __init__(self, root=os.path.join(DIR, "../../data/"), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
         self.imgs = glob.glob(self.train_data + "/*")
 
     def download(self):
         """Download the dataset."""
-        save_path = os.path.join(self.root, "celeba.zip")
-        os.makedirs(self.root)
+        save_path = os.path.join(self.dir, "celeba.zip")
+        os.makedirs(self.dir)
 
         try:
             subprocess.check_call(["curl", "-L", type(self).urls["train"], "--output", save_path])
@@ -416,7 +418,7 @@ class CelebA64(ExternalDataset):
 
         with zipfile.ZipFile(save_path) as zf:
             self.logger.info("Extracting CelebA ...")
-            zf.extractall(self.root)
+            zf.extractall(self.dir)
 
         os.remove(save_path)
 
@@ -448,9 +450,5 @@ class CelebA64(ExternalDataset):
 
 class CelebA32(CelebA64):
     shape = (3, 32, 32)
-
-    def __init__(self, root=os.path.join(DIR, "../../data/celeba32"), **kwargs):
-        super().__init__(root, *kwargs)
-
-        self.imgs = glob.glob(self.train_data + "/*")
+    name = "celeba32"
 

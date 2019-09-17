@@ -4,7 +4,20 @@ import numpy as np
 import torch
 import random
 
-from skorch.callbacks import Callback
+from skorch.callbacks import Callback, TrainEndCheckpoint
+
+
+class TrainLastCheckpoint(TrainEndCheckpoint):
+    """Solve Bug in skorch for continue training."""
+
+    on_epoch_end = TrainEndCheckpoint.on_train_end
+
+    @property
+    def f_history_(self):
+        try:
+            return self.checkpoint_.f_history_
+        except:
+            return None
 
 
 def set_seed(seed):
@@ -30,7 +43,7 @@ class FixRandomSeed(Callback):
     def initialize(self):
         if self.seed is not None:
             if self.verbose > 0:
-                print("setting random seed to: ", self.seed)
+                print("setting random seed to: ", self.seed, flush=True)
             set_seed(self.seed)
         torch.backends.cudnn.deterministic = self.is_cudnn_deterministic
 
@@ -61,6 +74,7 @@ def count_parameters(model):
 
 def get_only_first_item(to_index):
     """Helper function to make a class `to_index` return `to_index[i][0]` when indexed."""
+
     class FirstIndex:
         def __init__(self, to_index):
             self.to_index = to_index
@@ -94,7 +108,7 @@ def make_Xy_input(dataset, y=None):
         # array-like or tensor
         X = dataset
 
-    return ({'X': X, "y": y}, y)
+    return ({"X": X, "y": y}, y)
 
 
 def tuple_cont_to_cont_tuple(tuples):

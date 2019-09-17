@@ -14,7 +14,7 @@ class NeuralProcessLoss(nn.Module):
         Function which returns the weight of the kl divergence given `is_training`.
 
     is_return_all : bool, optional
-        Wheter to return the NLL for each example rather than average.
+        Whether to return the NLL for each example rather than average.
 
     References
     ----------
@@ -46,7 +46,7 @@ class NeuralProcessLoss(nn.Module):
         batch_size, n_trgt, _ = Y_trgt.shape
 
         # mean over all targets => unbiased estimate of the autoregressive loss
-        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).mean(-1)
+        neg_log_like = -p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).mean(-1)
 
         if q_z_trgt is not None:
             # during validation the kl will be 0 because we do not compute q_z_trgt

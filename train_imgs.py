@@ -1,13 +1,6 @@
 import os
 from os.path import dirname, abspath
-
-base_dir = dirname(dirname(dirname(abspath(__file__))))
-os.chdir(base_dir)
-
 import sys
-
-sys.path.append("notebooks")
-sys.path.append(".")
 
 
 from functools import partial
@@ -72,15 +65,12 @@ def _get_train_kwargs(model_name, **kwargs):
 
     if model_name == "AttnCNP":
         dflt_kwargs = dict(
-            batch_size=32,
-            iterator_train__collate_fn=dflt_collate,
-            iterator_valid__collate_fn=dflt_collate,
+            iterator_train__collate_fn=dflt_collate, iterator_valid__collate_fn=dflt_collate
         )
 
     elif model_name == "SelfAttnCNP":
         dflt_kwargs = dict(
             batch_size=2,
-            lr=5e-4,
             iterator_train__collate_fn=dflt_collate,
             iterator_valid__collate_fn=dflt_collate,
         )
@@ -94,7 +84,7 @@ def _get_train_kwargs(model_name, **kwargs):
         dflt_kwargs = dict(
             iterator_train__collate_fn=repeat_collate,
             iterator_valid__collate_fn=masked_collate,
-            batch_size=kwargs.get("batch_size", 64) // 2,
+            batch_size=kwargs.get("batch_size", 16) // 2,
         )
 
     dflt_kwargs.update(kwargs)
@@ -116,12 +106,13 @@ def get_model(
         + (1 - min_sigma) * F.softplus(scale_trgt),
     )
 
-    dflt_kernel_size = img_shape[-1] // 5  # currently assumes square images
+    denom = 10
+    dflt_kernel_size = img_shape[-1] // denom  # currently assumes square images
     if dflt_kernel_size % 2 == 0:
         dflt_kernel_size -= 1  # make sure odd
 
     if init_kernel_size is None:
-        init_kernel_size = dflt_kernel_size
+        init_kernel_size = dflt_kernel_size + 4
     if kernel_size is None:
         kernel_size = dflt_kernel_size
 
@@ -209,7 +200,7 @@ def train(models, train_datasets, **kwargs):
         train_datasets,
         add_y_dim(models, train_datasets),
         NeuralProcessLoss,
-        chckpnt_dirname="results/neural_process_imgs/",
+        chckpnt_dirname="results/imgs/",
         is_retrain=True,
         train_split=skorch.dataset.CVSplit(0.1),  # use 10% of data for validation
         patience=10,
@@ -219,9 +210,15 @@ def train(models, train_datasets, **kwargs):
 
 
 def main(args):
+    is_dev = args.dataset == "devmnist"
+    if is_dev:
+        args.dataset = "mnist"
 
     # DATA
     train_dataset, test_dataset = get_train_test_dataset(args.dataset)
+
+    if is_dev:
+        train_dataset.data = train_dataset.data[:3000, ...]
 
     model = get_model(
         args.model,
@@ -245,6 +242,7 @@ def main(args):
         runs=args.runs,
         starting_run=args.starting_run,
         max_epochs=args.max_epochs,
+        is_continue_train=args.is_continue_train,
     )
 
 
@@ -260,7 +258,7 @@ def parse_arguments(args_to_parse):
         "dataset",
         type=str,
         help="Dataset.",
-        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
+        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "devmnist"],
     )
 
     # General optional args
@@ -289,6 +287,11 @@ def parse_arguments(args_to_parse):
     general.add_argument(
         "--is-progressbar", action="store_true", help="Whether to use a progressbar."
     )
+    general.add_argument(
+        "--is-continue-train",
+        action="store_true",
+        help="Whether to continue training from the last checkpoint of the previous run.",
+    )
 
     # CCP options
     ccp = parser.add_argument_group("CCP Options")
@@ -299,11 +302,6 @@ def parse_arguments(args_to_parse):
         "--no-batchnorm",
         action="store_true",
         help="Whether to remove batchnorm when training CCP.",
-    )
-    ccp.add_argument(
-        "--is-receptivefield",
-        action="store_true",
-        help="Numerically estimates the receptive field of the model.",
     )
 
     args = parser.parse_args(args_to_parse)

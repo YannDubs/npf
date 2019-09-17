@@ -10,6 +10,7 @@ src/
 results
 .vscode
 __MACOSX/
+logs
 
 # Byte-compiled / optimized / DLL files
 *.egg-info
