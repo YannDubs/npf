@@ -16,6 +16,7 @@ from neuralproc import RegularGridsConvolutionalProcess, AttentiveNeuralProcess,
 from neuralproc.predefined import UnetCNN, CNN, SelfAttention, MLP, ResConvBlock
 from neuralproc import merge_flat_input
 from neuralproc.utils.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
+from neuralproc.utils.predict import GenAllAutoregressivePixel
 from neuralproc.utils.helpers import (
     MultivariateNormalDiag,
     ProbabilityConverter,
@@ -53,7 +54,7 @@ def _get_train_kwargs(model_name, **kwargs):
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     get_cntxt_trgt = GridCntxtTrgtGetter(
-        context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
+        context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5, is_batch_share="AR" in model_name),
         target_masker=no_masker,
         is_add_cntxts_to_trgts=False,
     )
@@ -61,7 +62,9 @@ def _get_train_kwargs(model_name, **kwargs):
     dflt_collate = cntxt_trgt_collate(get_cntxt_trgt)
     masked_collate = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=True)
     # repeat the batch twice => every function has 2 different cntxt and trgt samples
-    repeat_collate = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=True, is_repeat_batch=True)
+    repeat_collate = cntxt_trgt_collate(
+        get_cntxt_trgt, is_return_masks=True, is_duplicate_batch=True
+    )
 
     if model_name == "AttnCNP":
         dflt_kwargs = dict(
@@ -70,12 +73,12 @@ def _get_train_kwargs(model_name, **kwargs):
 
     elif model_name == "SelfAttnCNP":
         dflt_kwargs = dict(
-            batch_size=2,
+            # batch_size=2, only requrired for 6x*64
             iterator_train__collate_fn=dflt_collate,
             iterator_valid__collate_fn=dflt_collate,
         )
 
-    elif model_name in ["GridedCCP", "GridedUnetCCP"]:
+    elif model_name in ["GridedCCP", "GridedUnetCCP", "GridedCCP_AR", "GridedCCP_AConfR"]:
         dflt_kwargs = dict(
             iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
         )
@@ -92,7 +95,13 @@ def _get_train_kwargs(model_name, **kwargs):
 
 
 def get_model(
-    model_name, min_sigma, n_blocks, init_kernel_size, kernel_size, img_shape, no_batchnorm
+    model_name,
+    min_sigma=0.01,
+    n_blocks=5,
+    init_kernel_size=None,
+    kernel_size=None,
+    img_shape=(32, 32),
+    no_batchnorm=False,
 ):
     """Return the correct model."""
 
@@ -143,13 +152,14 @@ def get_model(
     )
 
     # MODEL
+    AttnCNP = model = partial(
+        AttentiveNeuralProcess, x_dim=x_dim, attention="transformer", **neuralproc_kwargs
+    )
+
     if model_name == "AttnCNP":
-        model = partial(
-            AttentiveNeuralProcess, x_dim=x_dim, attention="transformer", **neuralproc_kwargs
-        )
+        model = AttnCNP
 
     elif model_name == "SelfAttnCNP":
-        AttnCNP = get_model("AttnCNP")
         model = partial(AttnCNP, XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True))
 
     elif model_name == "GridedCCP":
@@ -158,6 +168,28 @@ def get_model(
             x_dim=x_dim,
             Conv=SetConv,
             PseudoTransformer=partial(CNN, **cnn_kwargs),
+            **neuralproc_kwargs,
+        )
+
+    elif model_name == "GridedCCP_AR":
+        model = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=x_dim,
+            Conv=SetConv,
+            PseudoTransformer=partial(CNN, **cnn_kwargs),
+            n_autoregressive_steps=5,
+            **neuralproc_kwargs,
+        )
+
+    elif model_name == "GridedCCP_AConfR":
+        model = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=x_dim,
+            Conv=SetConv,
+            PseudoTransformer=partial(CNN, **cnn_kwargs),
+            n_autoregressive_steps=5,
+            get_gen_autoregressive_trgts=GenAllAutoregressivePixel(),
+            is_autoregress_confidence=True,
             **neuralproc_kwargs,
         )
 
@@ -186,7 +218,7 @@ def get_train_test_dataset(dataset):
     try:
         train_dataset = get_dataset(dataset)(split="train")
         test_dataset = get_dataset(dataset)(split="test")
-    except:
+    except TypeError:
         train_dataset, test_dataset = train_dev_split(
             get_dataset(dataset)(), dev_size=0.1, is_stratify=False
         )
@@ -200,25 +232,17 @@ def train(models, train_datasets, **kwargs):
         train_datasets,
         add_y_dim(models, train_datasets),
         NeuralProcessLoss,
-        chckpnt_dirname="results/imgs/",
         is_retrain=True,
         train_split=skorch.dataset.CVSplit(0.1),  # use 10% of data for validation
-        patience=10,
         seed=123,
         **kwargs,
     )
 
 
 def main(args):
-    is_dev = args.dataset == "devmnist"
-    if is_dev:
-        args.dataset = "mnist"
 
     # DATA
     train_dataset, test_dataset = get_train_test_dataset(args.dataset)
-
-    if is_dev:
-        train_dataset.data = train_dataset.data[:3000, ...]
 
     model = get_model(
         args.model,
@@ -243,6 +267,8 @@ def main(args):
         starting_run=args.starting_run,
         max_epochs=args.max_epochs,
         is_continue_train=args.is_continue_train,
+        patience=args.patience,
+        chckpnt_dirname=args.chckpnt_dirname,
     )
 
 
@@ -252,13 +278,21 @@ def parse_arguments(args_to_parse):
         "model",
         type=str,
         help="Model.",
-        choices=["AttnCNP", "SelfAttnCNP", "GridedCCP", "GridedUnetCCP", "GridedSharedUnetCCP"],
+        choices=[
+            "AttnCNP",
+            "SelfAttnCNP",
+            "GridedCCP",
+            "GridedUnetCCP",
+            "GridedSharedUnetCCP",
+            "GridedCCP_AR",
+            "GridedCCP_AConfR",
+        ],
     )
     parser.add_argument(
         "dataset",
         type=str,
         help="Dataset.",
-        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "devmnist"],
+        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
     )
 
     # General optional args
@@ -285,6 +319,13 @@ def parse_arguments(args_to_parse):
         help="Lowest bound on the std that the model can predict.",
     )
     general.add_argument(
+        "--chckpnt-dirname",
+        default="results/imgs/",
+        type=str,
+        help="Checpoint and result directory.",
+    )
+    general.add_argument("--patience", default=10, type=int, help="Patience for early stopping.")
+    general.add_argument(
         "--is-progressbar", action="store_true", help="Whether to use a progressbar."
     )
     general.add_argument(
@@ -306,7 +347,7 @@ def parse_arguments(args_to_parse):
 
     args = parser.parse_args(args_to_parse)
 
-    if "name" not in args:
+    if args.name is None:
         args.name = args.model
 
     return args

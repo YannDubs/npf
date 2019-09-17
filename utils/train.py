@@ -1,6 +1,7 @@
 from copy import deepcopy
 import os
 import warnings
+from functools import partial
 
 import numpy as np
 import torch
@@ -11,7 +12,7 @@ from skorch import NeuralNet
 from skorch.callbacks import ProgressBar, Checkpoint, EarlyStopping, LoadInitState
 from skorch.helper import predefined_split
 
-from .helpers import FixRandomSeed, TrainLastCheckpoint
+from .helpers import FixRandomSeed
 from .evaluate import eval_loglike
 
 
@@ -177,12 +178,12 @@ def train_models(
                     chckpnt_dirname = init_chckpnt_dirname + suffix
                     test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
                     chckpt = Checkpoint(dirname=chckpnt_dirname, monitor="valid_loss_best")
-                    last_chckpt = TrainLastCheckpoint(dirname=chckpnt_dirname)
-                    callbacks.extend([chckpt, last_chckpt])
+                    callbacks.extend([chckpt])
 
                 if is_continue_train:
                     assert chckpnt_dirname is not None
-                    load_state = LoadInitState(last_chckpt)
+                    # start from chckpt until LastCheckpoint is implemented
+                    load_state = LoadInitState(chckpt)
                     callbacks.append(load_state)
 
                 if patience is not None:

@@ -1,23 +1,26 @@
 from multiprocessing import cpu_count, Pool
+import glob
+import os
+import random
 
 import numpy as np
 import torch
-import random
+import pandas as pd
 
-from skorch.callbacks import Callback, TrainEndCheckpoint
+from skorch.callbacks import Callback
 
 
-class TrainLastCheckpoint(TrainEndCheckpoint):
-    """Solve Bug in skorch for continue training."""
-
-    on_epoch_end = TrainEndCheckpoint.on_train_end
-
-    @property
-    def f_history_(self):
-        try:
-            return self.checkpoint_.f_history_
-        except:
-            return None
+def load_all_results(folder):
+    """Load all the results (by data, model, run) from a directory."""
+    pattern = "*/*/run_*/eval.csv"
+    df = pd.DataFrame(
+        [
+            f.split("/")[-4:-1] + [pd.read_csv(f, header=None).mean()[0]]
+            for f in glob.glob(os.path.join(folder, pattern))
+        ]
+    )
+    df.columns = ["Data", "Model", "Runs", "LogLike"]
+    return df
 
 
 def set_seed(seed):

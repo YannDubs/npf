@@ -1,6 +1,11 @@
 import torch
 
-__all__ = ["VanillaPredictor", "AutoregressivePredictor", "GenNextAutoregressivePixelL1"]
+__all__ = [
+    "VanillaPredictor",
+    "AutoregressivePredictor",
+    "GenNextAutoregressivePixelL1",
+    "GenAllAutoregressivePixel",
+]
 
 
 class VanillaPredictor:
@@ -13,6 +18,20 @@ class VanillaPredictor:
         p_y_pred, *_ = self.model(*args)
         mean_y = p_y_pred.base_dist.loc.detach()
         return mean_y
+
+
+class GenAllAutoregressivePixel:
+    """Helper function that returns all pixels at every step n times."""
+
+    def __init__(self, n=100):
+        self.n = n
+
+    def __call__(self, mask_cntxt):
+        next_mask_cntxt = mask_cntxt.clone()
+        next_mask_cntxt[:] = 1
+
+        for i in range(self.n):
+            yield next_mask_cntxt.clone()
 
 
 class GenNextAutoregressivePixelL1:

@@ -154,7 +154,7 @@ class NeuralProcess(nn.Module):
         PredictiveDistribution=Normal,
         is_use_x=True,
         pred_loc_transformer=nn.Identity(),
-        pred_scale_transformer=lambda scale_trgt: 0.1 + 0.9 * F.softplus(scale_trgt),
+        pred_scale_transformer=lambda scale_trgt: 0.01 + 0.99 * F.softplus(scale_trgt),
         get_gen_autoregressive_trgts=GenNextAutoregressivePixelL1(3),
         n_autoregressive_steps=0,
     ):
@@ -637,7 +637,7 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
     Notes
     -----
     - Assumes that input, output and pseudo points are on the same grid
-    - Assumes that Y_cntxt is the the grid values (y_dim / channels on last dim),
+    - Assumes that Y_cntxt is the grid values (y_dim / channels on last dim),
     while X_cntxt and X_trgt are confidence masks of the shape of the grid rather
     than set of features.
     - This cannot be used for sub-pixel interpolation / super resolution.
@@ -772,6 +772,7 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
 
         gen_cur_mask_trgt = self.get_gen_autoregressive_trgts(mask_cntxt)
         X = X.clone()
+        X_old = X
 
         for i, cur_mask_trgt in enumerate(gen_cur_mask_trgt):
             if i == self.n_autoregressive_steps:
@@ -779,16 +780,20 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
 
             p_y_pred, *_ = self(mask_cntxt, X, cur_mask_trgt)
             mean_y_pred = p_y_pred.base_dist.loc
+            X = X_old.clone()
             X[cur_mask_trgt.squeeze(-1)] = mean_y_pred.view(-1, mean_y_pred.shape[-1])
 
             if self.is_autoregress_confidence:
                 cur_mask_trgt = cur_mask_trgt.float()
                 std_y_pred = p_y_pred.base_dist.scale
-                std_y_pred = std_y_pred.view(-1, std_y_pred.size(-1)).mean(-1, keepdim=True)
+                std_y_pred = (
+                    # don't backprop through all, only transformation of sigma
+                    std_y_pred.view(-1, std_y_pred.size(-1)).mean(-1, keepdim=True)
+                )
                 # initial std could be very large => make sure not saturating sigmoid (*0.1)
                 cur_mask_trgt[cur_mask_trgt.bool()] = self.std_to_conf(std_y_pred * 0.1).squeeze(
                     -1
-                )  # DEV MODE
+                )
 
             mask_cntxt = cur_mask_trgt
 

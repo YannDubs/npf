@@ -334,7 +334,7 @@ class ExternalDataset(Dataset, abc.ABC):
 
     def __init__(self, root, transforms_list=[], logger=logging.getLogger(__name__)):
         self.dir = os.path.join(root, self.name)
-        self.train_data = os.path.join(root, type(self).files["train"])
+        self.train_data = os.path.join(self.dir, type(self).files["train"])
         self.transforms = transforms.Compose(transforms_list)
         self.logger = logger
 
