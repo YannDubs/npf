@@ -54,7 +54,7 @@ def _get_train_kwargs(model_name, **kwargs):
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     get_cntxt_trgt = GridCntxtTrgtGetter(
-        context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5, is_batch_share="AR" in model_name),
+        context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.5),
         target_masker=no_masker,
         is_add_cntxts_to_trgts=False,
     )
@@ -73,12 +73,12 @@ def _get_train_kwargs(model_name, **kwargs):
 
     elif model_name == "SelfAttnCNP":
         dflt_kwargs = dict(
-            # batch_size=2, only requrired for 6x*64
+            # batch_size=2, only requrired for 64*64
             iterator_train__collate_fn=dflt_collate,
             iterator_valid__collate_fn=dflt_collate,
         )
 
-    elif model_name in ["GridedCCP", "GridedUnetCCP", "GridedCCP_AR", "GridedCCP_AConfR"]:
+    elif model_name in ["GridedCCP", "GridedUnetCCP"]:
         dflt_kwargs = dict(
             iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
         )
@@ -171,28 +171,6 @@ def get_model(
             **neuralproc_kwargs,
         )
 
-    elif model_name == "GridedCCP_AR":
-        model = partial(
-            RegularGridsConvolutionalProcess,
-            x_dim=x_dim,
-            Conv=SetConv,
-            PseudoTransformer=partial(CNN, **cnn_kwargs),
-            n_autoregressive_steps=5,
-            **neuralproc_kwargs,
-        )
-
-    elif model_name == "GridedCCP_AConfR":
-        model = partial(
-            RegularGridsConvolutionalProcess,
-            x_dim=x_dim,
-            Conv=SetConv,
-            PseudoTransformer=partial(CNN, **cnn_kwargs),
-            n_autoregressive_steps=5,
-            get_gen_autoregressive_trgts=GenAllAutoregressivePixel(),
-            is_autoregress_confidence=True,
-            **neuralproc_kwargs,
-        )
-
     elif model_name == "GridedUnetCCP":
         model = partial(
             RegularGridsConvolutionalProcess,
@@ -275,18 +253,7 @@ def main(args):
 def parse_arguments(args_to_parse):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "model",
-        type=str,
-        help="Model.",
-        choices=[
-            "AttnCNP",
-            "SelfAttnCNP",
-            "GridedCCP",
-            "GridedUnetCCP",
-            "GridedSharedUnetCCP",
-            "GridedCCP_AR",
-            "GridedCCP_AConfR",
-        ],
+        "model", type=str, help="Model.", choices=["AttnCNP", "SelfAttnCNP", "GridedCCP"]
     )
     parser.add_argument(
         "dataset",
@@ -320,9 +287,9 @@ def parse_arguments(args_to_parse):
     )
     general.add_argument(
         "--chckpnt-dirname",
-        default="results/imgs/",
+        default="results/iclr_imgs/",
         type=str,
-        help="Checpoint and result directory.",
+        help="Checkpoint and result directory.",
     )
     general.add_argument("--patience", default=10, type=int, help="Patience for early stopping.")
     general.add_argument(

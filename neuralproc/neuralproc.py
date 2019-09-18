@@ -19,7 +19,6 @@ from neuralproc.utils.helpers import (
 from neuralproc.utils.datasplit import CntxtTrgtGetter
 from neuralproc.utils.attention import get_attender
 from neuralproc.utils.setcnn import SetConv, GaussianRBF
-from neuralproc.utils.predict import GenNextAutoregressivePixelL1
 
 from .encoders import merge_flat_input, discard_ith_arg, RelativeSinusoidalEncodings
 
@@ -116,15 +115,6 @@ class NeuralProcess(nn.Module):
         Transformation to apply to the predicted scale (e.g. std for Gaussian) of
         Y_trgt. The default follows [3] by using a minimum of 0.1.
 
-    n_autoregressive_steps : int, optional
-        Number of autoregressive steps to take before the final prediction of
-        the context points.
-
-    get_gen_autoregressive_trgts : callable, optional
-        Function which returns a generator of the next mask target given the initial
-        mask context `get_next_tgrts(mask_cntxt)`. Only used if
-        `n_autoregressive_steps` not 0.
-
 
     References
     ----------
@@ -155,8 +145,6 @@ class NeuralProcess(nn.Module):
         is_use_x=True,
         pred_loc_transformer=nn.Identity(),
         pred_scale_transformer=lambda scale_trgt: 0.01 + 0.99 * F.softplus(scale_trgt),
-        get_gen_autoregressive_trgts=GenNextAutoregressivePixelL1(3),
-        n_autoregressive_steps=0,
     ):
         super().__init__()
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(
@@ -169,10 +157,6 @@ class NeuralProcess(nn.Module):
         self.PredictiveDistribution = PredictiveDistribution
         self.pred_loc_transformer = pred_loc_transformer
         self.pred_scale_transformer = pred_scale_transformer
-
-        self.get_gen_autoregressive_trgts = get_gen_autoregressive_trgts
-        self.n_autoregressive_steps = n_autoregressive_steps
-        self._is_autoregressing = False
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -263,7 +247,6 @@ class NeuralProcess(nn.Module):
             Latent distribution for the context points. `None` if
             `LatentEncoder=None` or not training.
         """
-        X_cntxt, Y_cntxt = self.autoregressive_preprocing(X_cntxt, Y_cntxt)
 
         # input assumed to be in [-1,1] during training
         if self.training:
@@ -385,15 +368,6 @@ class NeuralProcess(nn.Module):
     def set_extrapolation(self, min_max):
         """Set the neural process for extrapolation. Useful for child classes."""
         pass
-
-    def autoregressive_preprocing(self, X_cntxt, Y_cntxt):
-        """Given the last predictions, and inputs, return the input for the next
-        autoregressive step"""
-        if self.n_autoregressive_steps > 0:
-            raise NotImplementedError(
-                "Autoregressive preprocessing not yet implemented for general NeuralProcess"
-            )
-        return X_cntxt, Y_cntxt
 
 
 class AttentiveNeuralProcess(NeuralProcess):
@@ -691,7 +665,6 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
             is_chan_last=True,
             kernel_size=11,
         ),
-        is_autoregress_confidence=False,  # DEV MODE
         **kwargs
     ):
         super().__init__(
@@ -712,16 +685,6 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
             # higher density => higher conf
             temperature_transformer=F.softplus,
         )
-
-        self.is_autoregress_confidence = is_autoregress_confidence
-
-        if self.is_autoregress_confidence:
-            self.std_to_conf = ProbabilityConverter(
-                is_train_temperature=True,
-                is_train_bias=True,
-                # higher std => lower conf
-                temperature_transformer=lambda x: -F.softplus(x),
-            )
 
         self.reset_parameters()
 
@@ -763,40 +726,3 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
 
         return linear_trgts
 
-    def autoregressive_preprocing(self, mask_cntxt, X):
-        """Modifies and extends the context set through autoregression."""
-        if self._is_autoregressing:
-            return mask_cntxt, X
-        else:
-            self._is_autoregressing = True
-
-        gen_cur_mask_trgt = self.get_gen_autoregressive_trgts(mask_cntxt)
-        X = X.clone()
-        X_old = X
-
-        for i, cur_mask_trgt in enumerate(gen_cur_mask_trgt):
-            if i == self.n_autoregressive_steps:
-                break
-
-            p_y_pred, *_ = self(mask_cntxt, X, cur_mask_trgt)
-            mean_y_pred = p_y_pred.base_dist.loc
-            X = X_old.clone()
-            X[cur_mask_trgt.squeeze(-1)] = mean_y_pred.view(-1, mean_y_pred.shape[-1])
-
-            if self.is_autoregress_confidence:
-                cur_mask_trgt = cur_mask_trgt.float()
-                std_y_pred = p_y_pred.base_dist.scale
-                std_y_pred = (
-                    # don't backprop through all, only transformation of sigma
-                    std_y_pred.view(-1, std_y_pred.size(-1)).mean(-1, keepdim=True)
-                )
-                # initial std could be very large => make sure not saturating sigmoid (*0.1)
-                cur_mask_trgt[cur_mask_trgt.bool()] = self.std_to_conf(std_y_pred * 0.1).squeeze(
-                    -1
-                )
-
-            mask_cntxt = cur_mask_trgt
-
-        self._is_autoregressing = False
-
-        return mask_cntxt, X
