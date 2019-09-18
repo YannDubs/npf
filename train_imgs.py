@@ -61,10 +61,6 @@ def _get_train_kwargs(model_name, **kwargs):
 
     dflt_collate = cntxt_trgt_collate(get_cntxt_trgt)
     masked_collate = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=True)
-    # repeat the batch twice => every function has 2 different cntxt and trgt samples
-    repeat_collate = cntxt_trgt_collate(
-        get_cntxt_trgt, is_return_masks=True, is_duplicate_batch=True
-    )
 
     if model_name == "AttnCNP":
         dflt_kwargs = dict(
@@ -78,16 +74,9 @@ def _get_train_kwargs(model_name, **kwargs):
             iterator_valid__collate_fn=dflt_collate,
         )
 
-    elif model_name in ["GridedCCP", "GridedUnetCCP"]:
+    elif "GridedCCP" in model_name:
         dflt_kwargs = dict(
             iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
-        )
-
-    elif model_name == "GridedSharedUnetCCP":
-        dflt_kwargs = dict(
-            iterator_train__collate_fn=repeat_collate,
-            iterator_valid__collate_fn=masked_collate,
-            batch_size=kwargs.get("batch_size", 16) // 2,
         )
 
     dflt_kwargs.update(kwargs)
@@ -171,20 +160,20 @@ def get_model(
             **neuralproc_kwargs,
         )
 
-    elif model_name == "GridedUnetCCP":
+    elif model_name == "GridedCCP_large":
+        model = partial(
+            RegularGridsConvolutionalProcess,
+            x_dim=x_dim,
+            Conv=SetConv,
+            PseudoTransformer=partial(CNN, **cnn_kwargs),
+            **neuralproc_kwargs,
+        )
+
+    elif model_name == "UnetGridedCCP":
         model = partial(
             RegularGridsConvolutionalProcess,
             x_dim=x_dim,
             PseudoTransformer=PseudoTransformerUnetCNN,
-            **neuralproc_kwargs,
-        )
-
-    elif model_name == "GridedSharedUnetCCP":
-        model = partial(
-            RegularGridsConvolutionalProcess,
-            x_dim=x_dim,
-            # Unet CNN with depth separable resnet blocks
-            PseudoTransformer=partial(PseudoTransformerUnetCNN, is_force_same_bottleneck=True),
             **neuralproc_kwargs,
         )
 
