@@ -321,7 +321,7 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
             `target_masker(batch_size, mask_shape)`.
 
         is_return_masks : bool, optional
-            Whether to return X and the context and taregt masks, rather
+            Whether to return X and the context and target masks, rather
             than the selected `X_cntxt, Y_cntxt, X_trgt, Y_trgt`.
         """
         # parent function assumes y_dim is last rank

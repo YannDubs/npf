@@ -144,8 +144,8 @@ def train_models(
         kwargs["iterator_train__shuffle"] = True
 
     if "iterator_valid" not in kwargs and "iterator_valid__batch_size" not in kwargs:
-        # default to validation batch size when using default iterator
-        kwargs["iterator_valid__batch_size"] = 128
+        # default to 2 times batch size to be sure to be runnable (no backprop)
+        kwargs["iterator_valid__batch_size"] = batch_size * 2
 
     for data_name, data_train in datasets.items():
 
@@ -229,8 +229,8 @@ def train_models(
                 trainer.test_history = deepcopy(trainer.history)
                 trainer.history = history
 
-                valid_loss, best_epoch = _best_loss(trainer, suffix, mode="valid")
-                train_loss, _ = _best_loss(trainer, suffix, mode="train")
+                valid_loss, best_epoch = _best_loss(trainer, mode="valid")
+                train_loss, _ = _best_loss(trainer, mode="train")
 
                 print(
                     suffix,
@@ -277,7 +277,7 @@ def _eval_save_load(model, data_test, test_eval_file, is_force_rerun=False):
         return test_loglike.mean(axis=0)
 
 
-def _best_loss(model, suffix, mode="valid"):
+def _best_loss(model, mode="valid"):
     try:
         for epoch, history in enumerate(model.history[::-1]):
             if history["{}_loss_best".format(mode)]:

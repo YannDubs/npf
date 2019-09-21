@@ -29,6 +29,7 @@ DATASETS_DICT = {
     "celeba32": "CelebA32",
     "celeba64": "CelebA64",
     "zs-multi-mnist": "ZeroShotMultiMNIST",
+    "celeba": "CelebA",
 }
 DATASETS = list(DATASETS_DICT.keys())
 
@@ -422,6 +423,9 @@ class CelebA64(ExternalDataset):
 
         os.remove(save_path)
 
+        self.preprocess()
+
+    def preprocess(self):
         self.logger.info("Resizing CelebA ...")
         preprocess(self.train_data, size=type(self).shape[1:])
 
@@ -451,4 +455,13 @@ class CelebA64(ExternalDataset):
 class CelebA32(CelebA64):
     shape = (3, 32, 32)
     name = "celeba32"
+
+
+class CelebA(CelebA64):
+    shape = (3, 218, 178)
+    name = "celeba128"
+
+    # use the default ones
+    def preprocess(self):
+        pass
 

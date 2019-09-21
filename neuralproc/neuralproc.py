@@ -665,6 +665,8 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
             is_chan_last=True,
             kernel_size=11,
         ),
+        is_density=False,
+        is_normalization=False,
         **kwargs
     ):
         super().__init__(
@@ -677,7 +679,9 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
         )
 
         self.conv = Conv(y_dim)
-        self.resizer = nn.Linear(self.y_dim * 2, self.r_dim)  # 2 because also confidence channels
+        self.resizer = nn.Linear(
+            self.y_dim * (2 if is_density else 1), self.r_dim
+        )  # 2 because also confidence channels
         self.density_to_conf = ProbabilityConverter(
             is_train_temperature=True,
             is_train_bias=True,
@@ -685,6 +689,8 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
             # higher density => higher conf
             temperature_transformer=F.softplus,
         )
+        self.is_density = is_density
+        self.is_normalization = is_normalization
 
         self.reset_parameters()
 
@@ -699,15 +705,23 @@ class RegularGridsConvolutionalProcess(ConvolutionalProcess):
         numerator = self.conv(X * mask_context)
         # a * c
         denominator = self.conv(mask_context.expand_as(X))
-        # normalized convolution
-        out = numerator / torch.clamp(denominator, min=1e-5)
+
+        if self.is_normalization:
+            # normalized convolution
+            out = numerator / torch.clamp(denominator, min=1e-5)
+        else:
+            out = numerator
+
         # initial density could be very large => make sure not saturating sigmoid (*0.1)
-        confidence = self.density_to_conf(denominator.view(-1, self.y_dim) * 0.1).view(
-            batch_size, self.y_dim, *grid_shape
-        )
-        # don't concatenate density but a bounded version ("confidence") =>
-        # doesn't break under high density
-        out = torch.cat([out, confidence], dim=1)
+
+        if self.is_density:
+            confidence = self.density_to_conf(denominator.view(-1, self.y_dim) * 0.1).view(
+                batch_size, self.y_dim, *grid_shape
+            )
+
+            # don't concatenate density but a bounded version ("confidence") =>
+            # doesn't break under high density
+            out = torch.cat([out, confidence], dim=1)
 
         out = self.resizer(channels_to_last_dim(out))
 

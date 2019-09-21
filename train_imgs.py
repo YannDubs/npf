@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from neuralproc import RegularGridsConvolutionalProcess, AttentiveNeuralProcess, NeuralProcessLoss
-from neuralproc.predefined import UnetCNN, CNN, SelfAttention, MLP, ResConvBlock
+from neuralproc.predefined import CNN, SelfAttention, MLP, ResConvBlock, GaussianConv2d
 from neuralproc import merge_flat_input
 from neuralproc.utils.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
 from neuralproc.utils.predict import GenAllAutoregressivePixel
@@ -62,16 +62,9 @@ def _get_train_kwargs(model_name, **kwargs):
     dflt_collate = cntxt_trgt_collate(get_cntxt_trgt)
     masked_collate = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=True)
 
-    if model_name == "AttnCNP":
+    if "AttnCNP" in model_name:
         dflt_kwargs = dict(
             iterator_train__collate_fn=dflt_collate, iterator_valid__collate_fn=dflt_collate
-        )
-
-    elif model_name == "SelfAttnCNP":
-        dflt_kwargs = dict(
-            # batch_size=2, only requrired for 64*64
-            iterator_train__collate_fn=dflt_collate,
-            iterator_valid__collate_fn=dflt_collate,
         )
 
     elif "GridedCCP" in model_name:
@@ -85,12 +78,15 @@ def _get_train_kwargs(model_name, **kwargs):
 
 def get_model(
     model_name,
-    min_sigma=0.01,
+    min_sigma=0.1,
     n_blocks=5,
     init_kernel_size=None,
     kernel_size=None,
     img_shape=(32, 32),
-    no_batchnorm=False,
+    is_no_normalization=False,
+    is_no_density=False,
+    is_rbf=False,
+    is_no_abs=False,
 ):
     """Return the correct model."""
 
@@ -104,44 +100,8 @@ def get_model(
         + (1 - min_sigma) * F.softplus(scale_trgt),
     )
 
-    denom = 10
-    dflt_kernel_size = img_shape[-1] // denom  # currently assumes square images
-    if dflt_kernel_size % 2 == 0:
-        dflt_kernel_size -= 1  # make sure odd
-
-    if init_kernel_size is None:
-        init_kernel_size = dflt_kernel_size + 4
-    if kernel_size is None:
-        kernel_size = dflt_kernel_size
-
-    SetConv = lambda y_dim: make_abs_conv(nn.Conv2d)(
-        y_dim,
-        y_dim,
-        groups=y_dim,
-        kernel_size=init_kernel_size,
-        padding=init_kernel_size // 2,
-        bias=False,
-    )
-
-    cnn_kwargs = dict(
-        ConvBlock=ResConvBlock,
-        Conv=nn.Conv2d,
-        Normalization=nn.Identity if no_batchnorm else nn.BatchNorm2d,
-        is_chan_last=True,
-        kernel_size=kernel_size,
-        n_blocks=n_blocks,
-    )
-
-    PseudoTransformerUnetCNN = partial(
-        UnetCNN,
-        Pool=torch.nn.MaxPool2d,
-        upsample_mode="bilinear",
-        max_nchannels=64,  # use constant number of channels and chosen to have similar num param
-        **cnn_kwargs,
-    )
-
     # MODEL
-    AttnCNP = model = partial(
+    AttnCNP = partial(
         AttentiveNeuralProcess, x_dim=x_dim, attention="transformer", **neuralproc_kwargs
     )
 
@@ -152,28 +112,55 @@ def get_model(
         model = partial(AttnCNP, XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True))
 
     elif model_name == "GridedCCP":
+        denom = 10
+        dflt_kernel_size = img_shape[-1] // denom  # currently assumes square images
+        if dflt_kernel_size % 2 == 0:
+            dflt_kernel_size -= 1  # make sure odd
+
+        if init_kernel_size is None:
+            init_kernel_size = dflt_kernel_size + 4
+        if kernel_size is None:
+            kernel_size = dflt_kernel_size
+
+        if is_rbf:
+
+            SetConv = lambda *args: GaussianConv2d(
+                kernel_size=init_kernel_size, padding=init_kernel_size // 2
+            )
+        elif is_no_abs:
+            SetConv = lambda y_dim: nn.Conv2d(
+                y_dim,
+                y_dim,
+                groups=y_dim,
+                kernel_size=init_kernel_size,
+                padding=init_kernel_size // 2,
+                bias=False,
+            )
+            print("no_abs")
+        else:
+            SetConv = lambda y_dim: make_abs_conv(nn.Conv2d)(
+                y_dim,
+                y_dim,
+                groups=y_dim,
+                kernel_size=init_kernel_size,
+                padding=init_kernel_size // 2,
+                bias=False,
+            )
+
         model = partial(
             RegularGridsConvolutionalProcess,
             x_dim=x_dim,
             Conv=SetConv,
-            PseudoTransformer=partial(CNN, **cnn_kwargs),
-            **neuralproc_kwargs,
-        )
-
-    elif model_name == "GridedCCP_large":
-        model = partial(
-            RegularGridsConvolutionalProcess,
-            x_dim=x_dim,
-            Conv=SetConv,
-            PseudoTransformer=partial(CNN, **cnn_kwargs),
-            **neuralproc_kwargs,
-        )
-
-    elif model_name == "UnetGridedCCP":
-        model = partial(
-            RegularGridsConvolutionalProcess,
-            x_dim=x_dim,
-            PseudoTransformer=PseudoTransformerUnetCNN,
+            PseudoTransformer=partial(
+                CNN,
+                ConvBlock=ResConvBlock,
+                Conv=nn.Conv2d,
+                is_chan_last=True,
+                kernel_size=kernel_size,
+                n_blocks=n_blocks,
+            ),
+            is_density=not is_no_density,
+            is_normalization=not is_no_normalization,
             **neuralproc_kwargs,
         )
 
@@ -218,7 +205,10 @@ def main(args):
         init_kernel_size=args.init_kernel_size,
         kernel_size=args.kernel_size,
         img_shape=get_img_size(args.dataset),
-        no_batchnorm=args.no_batchnorm,
+        is_no_density=args.is_no_density,
+        is_no_normalization=args.is_no_normalization,
+        is_rbf=args.is_rbf,
+        is_no_abs=args.is_no_abs,
     )
 
     model_kwargs = _get_train_kwargs(args.model, **dict(lr=args.lr, batch_size=args.batch_size))
@@ -248,7 +238,7 @@ def parse_arguments(args_to_parse):
         "dataset",
         type=str,
         help="Dataset.",
-        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist"],
+        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "celeba"],
     )
 
     # General optional args
@@ -296,9 +286,18 @@ def parse_arguments(args_to_parse):
     ccp.add_argument("--init-kernel-size", type=int, help="Kernel size to use for the set cnn.")
     ccp.add_argument("--kernel-size", type=int, help="Kernel size to use for the whole CNN.")
     ccp.add_argument(
-        "--no-batchnorm",
+        "--is-rbf", action="store_true", help="Whether to use gaussian rbf as first layer."
+    )
+    ccp.add_argument(
+        "--is-no-density", action="store_true", help="Whether not to add the density channel."
+    )
+    ccp.add_argument(
+        "--is-no-normalization", action="store_true", help="Whether not to normalize."
+    )
+    ccp.add_argument(
+        "--is-no-abs",
         action="store_true",
-        help="Whether to remove batchnorm when training CCP.",
+        help="Whether not to use absolute weights for the first layer.",
     )
 
     args = parser.parse_args(args_to_parse)

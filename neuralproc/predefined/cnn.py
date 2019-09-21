@@ -7,7 +7,42 @@ from torch.nn import functional as F
 from neuralproc.utils.initialization import weights_init, init_param_
 from neuralproc.utils.helpers import make_depth_sep_conv, channels_to_2nd_dim, channels_to_last_dim
 
-__all__ = ["ConvBlock", "ResNormalizedConvBlock", "ResConvBlock", "CNN", "UnetCNN"]
+__all__ = [
+    "GaussianConv2d",
+    "ConvBlock",
+    "ResNormalizedConvBlock",
+    "ResConvBlock",
+    "CNN",
+    "UnetCNN",
+]
+
+
+class GaussianConv2d(nn.Module):
+    def __init__(self, kernel_size=5, **kwargs):
+        super().__init__()
+        self.kwargs = kwargs
+        assert kernel_size % 2 == 1
+        self.kernel_sizes = (kernel_size, kernel_size)
+        self.exponent = -(torch.arange(0, kernel_size).view(-1, 1).float() - kernel_size // 2) ** 2
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.weights_x = nn.Parameter(torch.tensor([1.0]))
+        self.weights_y = nn.Parameter(torch.tensor([1.0]))
+
+    def forward(self, X):
+        # only switch first time to device
+        self.exponent = self.exponent.to(X.device)
+
+        marginal_x = torch.softmax(self.exponent * self.weights_x, dim=0)
+        marginal_y = torch.softmax(self.exponent * self.weights_y, dim=0).T
+
+        in_chan = X.size(1)
+        filters = marginal_x @ marginal_y
+        filters = filters.view(1, 1, *self.kernel_sizes).expand(in_chan, 1, *self.kernel_sizes)
+
+        return F.conv2d(X, filters, groups=in_chan, **self.kwargs)
 
 
 class ConvBlock(nn.Module):
