@@ -64,9 +64,8 @@ class NeuralProcess(nn.Module):
         parameter dependent default. Example:
             - `merge_flat_input(MLP, is_sum_merge=False)` : learn representation
             with MLP. `merge_flat_input` concatenates (or sums) X and Y inputs.
-            - `E` : self attention
-            mechanisms as [4]. For more parameters (attention type, number of
-            layers ...) refer to its docstrings.
+            - `merge_flat_input(SelfAttention, is_sum_merge=True)` : self attention mechanisms as 
+            [4]. For more parameters (attention type, number of layers ...) refer to its docstrings.
             - `discard_ith_arg(MLP, 0)` if want the encoding to only depend on Y.
 
     Decoder : nn.Module, optional
