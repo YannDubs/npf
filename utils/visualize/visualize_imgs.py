@@ -188,10 +188,11 @@ def plot_qualitative_with_kde(
     title=None,
     seed=123,
     height_ratios=[1, 3],
-    font_size=12,
+    font_size=14,
     h_pad=-3,
     x_lim={},
     is_smallest_xrange=False,
+    kdeplot_kwargs={},
     **kwargs
 ):
     """
@@ -211,7 +212,7 @@ def plot_qualitative_with_kde(
         chckpnt_dirname = dict(trainer.callbacks_)["Checkpoint"].dirname
         test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
         test_loglike = np.loadtxt(test_eval_file, delimiter=",")
-        sns.kdeplot(test_loglike, ax=axes[0], shade=True, label=name, cut=0)
+        sns.kdeplot(test_loglike, ax=axes[0], shade=True, label=name, cut=0, **kdeplot_kwargs)
         sns.despine()
         return test_loglike
 
@@ -325,6 +326,9 @@ def plot_qualitative_with_kde(
         idcs = [(np.abs(test_loglike - v)).argmin() for v in values]
         sorted_idcs = list(np.sort(idcs))[::-1]
 
+    axes[0].set_ylabel("Density")
+    axes[0].set_xlabel("Test Log-Likelihood")
+
     selected_data = []
 
     set_seed(seed)  # make sure same order and indices for cntxt and trgt
@@ -355,7 +359,7 @@ def plot_qualitative_with_kde(
     selected_data = {k: v for k, v in tuple_cont_to_cont_tuple(selected_data).items()}
 
     for v in values:
-        axes[0].axvline(v, linestyle=":", alpha=0.5, c="tab:green")
+        axes[0].axvline(v, linestyle=":", alpha=0.7, c="tab:green")
 
     axes[0].legend(loc="upper left")
 
