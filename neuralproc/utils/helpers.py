@@ -273,6 +273,26 @@ def make_abs_conv(Conv):
     return AbsConv
 
 
+def make_padded_conv(Conv, Padder):
+    """Make a convolution have any possible padding."""
+
+    class PaddedConv(Conv):
+        def __init__(self, *args, Padder=Padder, padding=0, **kwargs):
+            old_padding = 0
+            if Padder is None:
+                Padder = nn.Identity
+                old_padding = padding
+
+            super().__init__(*args, padding=old_padding, **kwargs)
+            self.padder = Padder(padding)
+
+        def forward(self, X):
+            X = self.padder(X)
+            return super().forward(X)
+
+    return PaddedConv
+
+
 def make_depth_sep_conv(Conv):
     """Make a convolution module depth separable."""
 
@@ -312,6 +332,21 @@ def make_depth_sep_conv(Conv):
             weights_init(self)
 
     return DepthSepConv
+
+
+class CircularPad2d(nn.Module):
+    """Implements a 2d circular padding."""
+
+    def __init__(self, padding):
+        super().__init__()
+        self.padding = padding
+
+    def forward(self, x):
+        x = torch.cat([x, x[:, :, 0 : self.padding, :]], dim=2)
+        x = torch.cat([x, x[..., 0 : self.padding]], dim=3)
+        x = torch.cat([x[:, :, -2 * self.padding : -self.padding, :], x], dim=2)
+        x = torch.cat([x[..., -2 * self.padding : -self.padding], x], dim=3)
+        return x
 
 
 class BackwardPDB(torch.autograd.Function):

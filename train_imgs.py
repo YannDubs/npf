@@ -21,8 +21,10 @@ from neuralproc.utils.helpers import (
     MultivariateNormalDiag,
     ProbabilityConverter,
     make_abs_conv,
+    make_padded_conv,
     channels_to_2nd_dim,
     channels_to_last_dim,
+    CircularPad2d,
 )
 
 from utils.train import train_models
@@ -87,6 +89,8 @@ def get_model(
     is_no_density=False,
     is_rbf=False,
     is_no_abs=False,
+    is_circular_padding=False,
+    is_bias=True,
 ):
     """Return the correct model."""
 
@@ -104,6 +108,8 @@ def get_model(
     AttnCNP = partial(
         AttentiveNeuralProcess, x_dim=x_dim, attention="transformer", **neuralproc_kwargs
     )
+
+    Padder = CircularPad2d if is_circular_padding else None
 
     if model_name == "AttnCNP":
         model = AttnCNP
@@ -124,11 +130,11 @@ def get_model(
 
         if is_rbf:
 
-            SetConv = lambda *args: GaussianConv2d(
+            SetConv = lambda *args: make_padded_conv(GaussianConv2d, Padder)(
                 kernel_size=init_kernel_size, padding=init_kernel_size // 2
             )
         elif is_no_abs:
-            SetConv = lambda y_dim: nn.Conv2d(
+            SetConv = lambda y_dim: make_padded_conv(nn.Conv2d, Padder)(
                 y_dim,
                 y_dim,
                 groups=y_dim,
@@ -136,9 +142,9 @@ def get_model(
                 padding=init_kernel_size // 2,
                 bias=False,
             )
-            print("no_abs")
+
         else:
-            SetConv = lambda y_dim: make_abs_conv(nn.Conv2d)(
+            SetConv = lambda y_dim: make_padded_conv(make_abs_conv(nn.Conv2d), Padder)(
                 y_dim,
                 y_dim,
                 groups=y_dim,
@@ -154,10 +160,11 @@ def get_model(
             PseudoTransformer=partial(
                 CNN,
                 ConvBlock=ResConvBlock,
-                Conv=nn.Conv2d,
+                Conv=make_padded_conv(nn.Conv2d, Padder),
                 is_chan_last=True,
                 kernel_size=kernel_size,
                 n_blocks=n_blocks,
+                is_bias=is_bias,
             ),
             is_density=not is_no_density,
             is_normalization=not is_no_normalization,
@@ -209,6 +216,8 @@ def main(args):
         is_no_normalization=args.is_no_normalization,
         is_rbf=args.is_rbf,
         is_no_abs=args.is_no_abs,
+        is_circular_padding=args.is_circular_padding,
+        is_bias=not args.is_no_bias,
     )
 
     model_kwargs = _get_train_kwargs(args.model, **dict(lr=args.lr, batch_size=args.batch_size))
@@ -238,7 +247,7 @@ def parse_arguments(args_to_parse):
         "dataset",
         type=str,
         help="Dataset.",
-        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "celeba"],
+        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "celeba", "zs-mnist"],
     )
 
     # General optional args
@@ -298,6 +307,10 @@ def parse_arguments(args_to_parse):
         "--is-no-abs",
         action="store_true",
         help="Whether not to use absolute weights for the first layer.",
+    )
+    ccp.add_argument("--is-no-bias", action="store_true", help="Whether not to use bias.")
+    ccp.add_argument(
+        "--is-circular-padding", action="store_true", help="Whether to use reflect padding."
     )
 
     args = parser.parse_args(args_to_parse)

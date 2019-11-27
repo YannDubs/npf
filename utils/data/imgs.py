@@ -29,6 +29,7 @@ DATASETS_DICT = {
     "celeba32": "CelebA32",
     "celeba64": "CelebA64",
     "zs-multi-mnist": "ZeroShotMultiMNIST",
+    "zs-mnist": "ZeroShotMNIST",
     "celeba": "CelebA",
 }
 DATASETS = list(DATASETS_DICT.keys())
@@ -230,9 +231,10 @@ class ZeroShotMultiMNIST(Dataset):
         try:
             self.data = torch.load(saved_data)
         except FileNotFoundError:
-            if not os.path.exists:
+            if not os.path.exists(self.dir):
                 os.mkdir(self.dir)
             mnist = datasets.MNIST(root=root, train=split == "train", download=True)
+            breakpoint()
             self.logger.info("Generating ZeroShotMultiMNIST {} split.".format(split))
             if split == "train":
                 self.data = self.make_multi_mnist_train(mnist.data, **kwargs)
@@ -264,18 +266,26 @@ class ZeroShotMultiMNIST(Dataset):
         background[:, borders[0] : -borders[0], borders[1] : -borders[1]] = train_dataset
         return torch.from_numpy(background)
 
-    def make_multi_mnist_test(self, test_dataset, varying_axis=None):
+    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
         """
         Test set of multi mnist by concatenating moving digits around `varying_axis`
-        (both axis if `None`) and concatenating them over the other.
+        (both axis if `None`) and concatenating them over the other. `n_test_digits` is th enumber
+        of digits per test image (default `self.n_test_digits`).
         """
         set_seed(self.seed)
 
         n_test = test_dataset.size(0)
 
+        if n_test_digits is None:
+            n_test_digits = self.n_test_digits
+
         if varying_axis is None:
-            out_axis0 = self.make_multi_mnist_test(test_dataset[: n_test // 2], varying_axis=0)
-            out_axis1 = self.make_multi_mnist_test(test_dataset[: n_test // 2], varying_axis=1)
+            out_axis0 = self.make_multi_mnist_test(
+                test_dataset[: n_test // 2], varying_axis=0, n_test_digits=n_test_digits
+            )
+            out_axis1 = self.make_multi_mnist_test(
+                test_dataset[: n_test // 2], varying_axis=1, n_test_digits=n_test_digits
+            )
             return torch.cat((out_axis0, out_axis1), dim=0)[torch.randperm(n_test)]
 
         fin_img_size = self._init_size * self.n_test_digits
@@ -287,7 +297,7 @@ class ZeroShotMultiMNIST(Dataset):
         tmp_background = torch.from_numpy(np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8))
 
         max_shift = fin_img_size - init_img_size[varying_axis]
-        shifts = np.random.randint(max_shift, size=n_tmp)
+        shifts = np.random.randint(max_shift, size=n_test_digits * n_test)
 
         test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[torch.randperm(n_tmp)]
 
@@ -316,6 +326,48 @@ class ZeroShotMultiMNIST(Dataset):
         # no label so return 0 (note that can't return None because)
         # dataloaders requires so
         return img, 0
+
+
+class ZeroShotMNIST(ZeroShotMultiMNIST):
+    """ZeroShotMNIST dataset. The test set consists of a single translated digit in a larger canvas.
+    The training set consists of mnist digits with added black borders such that the image
+    size is the same as in the test set, but the digits are of the same scale.
+
+    Parameters
+    ----------
+    root : string
+        Root directory of dataset.
+
+    transforms_list : list
+        List of `torch.vision.transforms` to apply to the data when loading it.
+
+    split : {'train', 'test'}, optional
+        According dataset is selected.
+
+    final_size : int, optional
+        Final size of the images (square of that shape). If `None` uses `n_test_digits*2`.
+
+    seed : int, optional
+
+    logger : logging.Logger
+
+    kwargs:
+        Additional arguments to the dataset data generation process `make_multi_mnist_*`.
+    """
+
+    missing_px_color = COLOUR_BLUE
+    n_classes = 0
+    shape = (1, 56, 56)
+    files = {"train": "train", "test": "test"}
+    name = "ZeroShotMNIST"
+
+    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
+        """
+        Like multi mnist but only shows a single digit.
+        """
+        return super().make_multi_mnist_test(
+            test_dataset, varying_axis=varying_axis, n_test_digits=1
+        )
 
 
 # EXTERNAL DATASETS

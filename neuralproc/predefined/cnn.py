@@ -124,6 +124,7 @@ class ConvBlock(nn.Module):
         weights_init(self)
 
     def forward(self, X):
+        X = self.padder(X)
         return self.conv(self.activation(self.norm(X)))
 
 
@@ -154,6 +155,9 @@ class ResConvBlock(nn.Module):
     is_bias : bool, optional
         Whether to use a bias.
 
+    Padder : nn.Module, optional
+        Padding module. E.g. `torch.nn.ReflectionPad1d`.
+
     References
     ----------
     [1] He, K., Zhang, X., Ren, S., & Sun, J. (2016, October). Identity mappings
@@ -174,6 +178,7 @@ class ResConvBlock(nn.Module):
         activation=nn.ReLU(),
         Normalization=nn.Identity,
         is_bias=True,
+        Padder=None,
     ):
         super().__init__()
         self.activation = activation
@@ -182,6 +187,12 @@ class ResConvBlock(nn.Module):
             raise ValueError("`kernel_size={}`, but should be odd.".format(kernel_size))
 
         padding = kernel_size // 2
+
+        if Padder is not None:
+            self.padder = Padder(padding)
+            padding = 0
+        else:
+            self.padder = nn.Identity()
 
         self.norm1 = Normalization(in_chan)
         self.conv1 = make_depth_sep_conv(Conv)(
@@ -199,7 +210,9 @@ class ResConvBlock(nn.Module):
         weights_init(self)
 
     def forward(self, X):
+        out = self.padder(X)
         out = self.conv1(self.activation(self.norm1(X)))
+        out = self.padder(out)
         out = self.conv2_depthwise(self.activation(self.norm2(X)))
         # adds residual before point wise => output can change number of channels
         out = out + X
@@ -208,7 +221,7 @@ class ResConvBlock(nn.Module):
 
 
 class ResNormalizedConvBlock(ResConvBlock):
-    """Modification of `ResNormalizedConvBlock` to use normalized convolutions [1].
+    """Modification of `ResConvBlock` to use normalized convolutions [1].
 
     Parameters
     ----------
@@ -230,6 +243,9 @@ class ResNormalizedConvBlock(ResConvBlock):
     is_bias : bool, optional
         Whether to use a bias.
 
+    Padder : nn.Module, optional
+        Padding module. E.g. `torch.nn.ReflectionPad1d`.
+
     References
     ----------
     [1] Knutsson, H., & Westin, C. F. (1993, June). Normalized and differential
@@ -237,7 +253,9 @@ class ResNormalizedConvBlock(ResConvBlock):
         Pattern Recognition (pp. 515-523). IEEE.
     """
 
-    def __init__(self, in_chan, out_chan, Conv, kernel_size=5, activation=nn.ReLU(), is_bias=True):
+    def __init__(
+        self, in_chan, out_chan, Conv, kernel_size=5, activation=nn.ReLU(), is_bias=True, **kwargs
+    ):
         super().__init__(
             in_chan,
             out_chan,
@@ -246,6 +264,7 @@ class ResNormalizedConvBlock(ResConvBlock):
             activation=activation,
             is_bias=is_bias,
             Normalization=nn.Identity,
+            **kwargs
         )  # make sure no normalization
 
     def reset_parameters(self):
@@ -253,17 +272,19 @@ class ResNormalizedConvBlock(ResConvBlock):
         self.bias = nn.Parameter(torch.tensor([0.0]))
 
         self.temperature = nn.Parameter(torch.tensor([0.0]))
-        self.temperature = init_param_(self.temperature)
+        init_param_(self.temperature)
 
     def forward(self, X):
         """
         Apply a normalized convolution. X should contain 2*in_chan channels.
         First halves for signal, last halve for corresponding confidence channels.
         """
-        signal, conf_1 = X.split(2, dim=-1)
+
+        signal, conf_1 = X.chunk(2, dim=1)
         # make sure confidence is in 0 1 (might not be due to the pointwise trsnf)
         conf_1 = conf_1.clamp(min=0, max=1)
         X = signal * conf_1
+
         numerator = self.conv1(self.activation(X))
         numerator = self.conv2_depthwise(self.activation(numerator))
         density = self.conv2_depthwise(self.conv1(conf_1))
@@ -277,9 +298,9 @@ class ResNormalizedConvBlock(ResConvBlock):
         out = out + X
 
         out = self.conv2_pointwise(out)
-        density_2 = self.conv2_pointwise(density_2)
+        conf_2 = self.conv2_pointwise(conf_2)
 
-        return torch.cat([out, density_2], dim=-1)
+        return torch.cat([out, conf_2], dim=1)
 
 
 class CNN(nn.Module):
@@ -325,12 +346,13 @@ class CNN(nn.Module):
     def _get_in_out_channels(self, n_channels, n_blocks):
         """Return a list of tuple of input and output channels."""
         if isinstance(n_channels, int):
-            channel_list = [n_channels] * n_blocks
+            channel_list = [n_channels] * (n_blocks + 1)
         else:
             channel_list = list(n_channels)
-            assert len(channel_list) == (n_blocks + 1), "{} != {}".format(
-                len(channel_list), n_blocks + 1
-            )
+
+        assert len(channel_list) == (n_blocks + 1), "{} != {}".format(
+            len(channel_list), n_blocks + 1
+        )
 
         return list(zip(channel_list, channel_list[1:]))
 
