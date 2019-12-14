@@ -14,10 +14,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 
-from skorch.utils import to_numpy
-
 from utils.helpers import set_seed
-from .helpers import random_translation, preprocess
+from .helpers import random_translation, preprocess, to_numpy
 
 DIR = os.path.abspath(os.path.dirname(__file__))
 COLOUR_BLACK = torch.tensor([0.0, 0.0, 0.0])
@@ -28,11 +26,15 @@ DATASETS_DICT = {
     "svhn": "SVHN",
     "celeba32": "CelebA32",
     "celeba64": "CelebA64",
+    "cifar10": "CIFAR10",
+    "cifar100": "CIFAR100",
+    "fashionmnist": "FashionMNIST",
     "zs-multi-mnist": "ZeroShotMultiMNIST",
     "zs-mnist": "ZeroShotMNIST",
     "celeba": "CelebA",
 }
 DATASETS = list(DATASETS_DICT.keys())
+
 
 
 # HELPERS
@@ -51,64 +53,93 @@ def get_img_size(dataset):
     return get_dataset(dataset).shape
 
 
+class MyDataset:
+    """Dataset wrapper that adds nice functionalitites.
+    
+    Parameters
+    ----------
+    is_augment : bool, optional
+        Whether to transform the training set (and thus validation).
+    is_return_index : bool, optional
+        Whether to append the index of the example to the label.
+    """
+
+    is_numbers = False
+
+    def __init__(self, *args, is_return_index=False, is_augment=False, **kwargs):
+        self.is_return_index = is_return_index
+        self.is_augment = is_augment
+
+        if self.is_augment and self.is_train:
+            transforms_list = [
+                transforms.Resize((self.shape[1], self.shape[2])),
+                transforms.RandomCrop((self.shape[1], self.shape[2]), padding=4),
+                # don't flip if working with numbers
+                transforms.RandomHorizontalFlip() if not self.is_numbers else torch.nn.Identity(),
+                transforms.RandomRotation(15),
+                transforms.ToTensor()
+            ]
+        else:
+            transforms_list = [
+                    transforms.Resize((self.shape[1], self.shape[2])),
+                    transforms.ToTensor()]
+
+        super().__init__(*args, transform=transforms.Compose(transforms_list), **kwargs)
+
+    def rm_all_transformations(self):
+        """Completely remove transformation. Used to plot or compute mean and variance."""
+        self.transform = transforms.Compose([transforms.ToTensor()])
+
+    def rm_augment(self):
+        """Remove data augmentation for testing."""
+        transforms_list = [
+                    transforms.Resize((self.shape[1], self.shape[2])),
+                    transforms.ToTensor()]
+        
+        self.transform = transforms.Compose(transforms_list)
+
+    def __getitem__(self, index):
+        out = super().__getitem__(index)
+        y = out[1]
+
+        if self.is_return_index:
+            try:
+                y = tuple(y) + (index,)
+            except TypeError:
+                y = [y, index]
+
+        return out[0], y
+
 # TORCHVISION DATASETS
-class SVHN(datasets.SVHN):
+class SVHN(MyDataset, datasets.SVHN):
     """SVHN wrapper. Docs: `datasets.SVHN.`
-
-    Notes
-    -----
-    - Transformations (and their order) follow [1] besides the fact that we scale
-    the images to be in [0,1] isntead of [-1,1] to make it easier to use
-    probabilistic generative models.
-
     Parameters
     ----------
     root : str, optional
         Path to the dataset root. 
-
-    split : {'train', 'test', "extra"}, optional
+    split : {'train', 'test', 'extra'}, optional
         According dataset is selected.
-
     kwargs:
-        Additional arguments to `datasets.CIFAR10`.
-
-    References
-    ----------
-    [1] Oliver, A., Odena, A., Raffel, C. A., Cubuk, E. D., & Goodfellow, I.
-        (2018). Realistic evaluation of deep semi-supervised learning algorithms.
-        In Advances in Neural Information Processing Systems (pp. 3235-3246).
+        Additional arguments to `datasets.SVHN`.
     """
 
     shape = (3, 32, 32)
     missing_px_color = COLOUR_BLACK
     n_classes = 10
     name = "SVHN"
+    mean = [0.43768448, 0.4437684, 0.4728041]
+    std = [0.19803017, 0.20101567, 0.19703583]
+    is_numbers = True
 
     def __init__(
         self,
         root=os.path.join(DIR, "../../data/"),
-        split="train",
         logger=logging.getLogger(__name__),
-        **kwargs
+        split="train",
+        **kwargs,
     ):
-
-        if split == "train":
-            transforms_list = [  # transforms.Lambda(lambda x: random_translation(x, 2)),
-                transforms.ToTensor()
-            ]
-        elif split == "test":
-            transforms_list = [transforms.ToTensor()]
-        else:
-            raise ValueError("Unkown `split = {}`".format(split))
-
-        super().__init__(
-            root,
-            split=split,
-            download=True,
-            transform=transforms.Compose(transforms_list),
-            **kwargs
-        )
-
+        self.is_train = split == "train"
+        super().__init__(root, download=True, split=split, **kwargs)
         self.labels = to_numpy(self.labels)
 
     @property
@@ -121,17 +152,79 @@ class SVHN(datasets.SVHN):
         self.labels = value
 
 
-class MNIST(datasets.MNIST):
-    """MNIST wrapper. Docs: `datasets.MNIST.`
-
+class CIFAR10(MyDataset, datasets.CIFAR10):
+    """CIFAR10 wrapper. Docs: `datasets.CIFAR10.`
     Parameters
     ----------
     root : str, optional
         Path to the dataset root. If `None` uses the default one.
+    split : {'train', 'test'}, optional
+        According dataset is selected.
+    kwargs:
+        Additional arguments to `datasets.CIFAR10`.
+    """
 
+    shape = (3, 32, 32)
+    n_classes = 10
+    missing_px_color = COLOUR_BLACK
+    name = "CIFAR10"
+    mean = [0.4914009, 0.48215896, 0.4465308]
+    std = [0.24703279, 0.24348423, 0.26158753]
+
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/"),
+        logger=logging.getLogger(__name__),
+        split="train",
+        **kwargs,
+    ):
+        self.is_train = split == "train"
+
+        super().__init__(root, train=self.is_train, download=True, **kwargs)
+
+        self.targets = to_numpy(self.targets)
+
+
+class CIFAR100(MyDataset, datasets.CIFAR100):
+    """CIFAR100 wrapper. Docs: `datasets.CIFAR100.`
+    Parameters
+    ----------
+    root : str, optional
+        Path to the dataset root. If `None` uses the default one.
+    split : {'train', 'test'}, optional
+        According dataset is selected.
+    kwargs:
+        Additional arguments to `datasets.CIFAR100`.
+    """
+
+    shape = (3, 32, 32)
+    n_classes = 100
+    missing_px_color = COLOUR_BLACK
+    name = "CIFAR100"
+    mean = [0.5070754, 0.48655024, 0.44091907]
+    std = [0.26733398, 0.25643876, 0.2761503]
+
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/"),
+        split="train",
+        logger=logging.getLogger(__name__),
+        **kwargs,
+    ):
+
+        self.is_train = split == "train"
+        super().__init__(root, train=self.is_train, download=True, **kwargs)
+        self.targets = to_numpy(self.targets)
+
+
+class MNIST(MyDataset, datasets.MNIST):
+    """MNIST wrapper. Docs: `datasets.MNIST.`
+    Parameters
+    ----------
+    root : str, optional
+        Path to the dataset root. If `None` uses the default one.
     split : {'train', 'test', "extra"}, optional
         According dataset is selected.
-
     kwargs:
         Additional arguments to `datasets.MNIST`.
     """
@@ -140,32 +233,53 @@ class MNIST(datasets.MNIST):
     n_classes = 10
     missing_px_color = COLOUR_BLUE
     name = "MNIST"
+    mean = [0.13066062]
+    std = [0.30810776]
+    is_numbers = True
 
     def __init__(
         self,
         root=os.path.join(DIR, "../../data/"),
         split="train",
         logger=logging.getLogger(__name__),
-        **kwargs
+        **kwargs,
     ):
 
-        if split == "train":
-            transforms_list = [transforms.Resize(32), transforms.ToTensor()]
-        elif split == "test":
-            transforms_list = [transforms.Resize(32), transforms.ToTensor()]
-        else:
-            raise ValueError("Unkown `split = {}`".format(split))
-
-        super().__init__(
-            root,
-            train=split == "train",
-            download=True,
-            transform=transforms.Compose(transforms_list),
-            **kwargs
-        )
-
+        self.is_train = split == "train"
+        super().__init__(root, train=self.is_train, download=True, **kwargs)
         self.targets = to_numpy(self.targets)
 
+
+class FashionMNIST(MyDataset, datasets.FashionMNIST):
+    """FashionMNIST wrapper. Docs: `datasets.FashionMNIST.`
+    Parameters
+    ----------
+    root : str, optional
+        Path to the dataset root. If `None` uses the default one.
+    split : {'train', 'test'}, optional
+        According dataset is selected.
+    kwargs:
+        Additional arguments to `datasets.FashionMNIST`.
+    """
+
+    shape = (1, 32, 32)
+    n_classes = 10
+    missing_px_color = COLOUR_BLUE
+    name = "FashionMNIST"
+    mean = [0.2860402]
+    std = [0.3530239]
+
+    def __init__(
+        self,
+        root=os.path.join(DIR, "../../data/"),
+        split="train",
+        logger=logging.getLogger(__name__),
+        **kwargs,
+    ):
+
+        self.is_train = split == "train"
+        super().__init__(root, train=self.is_train, download=True, **kwargs)
+        self.targets = to_numpy(self.targets)
 
 # GENERATED DATASETS
 class ZeroShotMultiMNIST(Dataset):
@@ -203,6 +317,7 @@ class ZeroShotMultiMNIST(Dataset):
     shape = (1, 56, 56)
     files = {"train": "train", "test": "test"}
     name = "ZeroShotMultiMNIST"
+    is_numbers = True
 
     def __init__(
         self,

@@ -1,5 +1,6 @@
 import os
 import glob
+import copy
 
 from tqdm import tqdm
 import h5py
@@ -8,79 +9,100 @@ import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
+import skorch
+
+def to_numpy(X):
+    """Generic function to convert array like to numpy."""
+    if isinstance(X, list):
+        X = np.array(X)
+    return skorch.utils.to_numpy(X)
 
 
-class _DatasetSubset(Dataset):
-    """Helper to split train dataset into train and dev dataset.
 
+def make_ssl_targets(
+    targets, n_labels, unlabeled_class=-1, is_stratify=True, seed=123
+):
+    """Take supervised targets and convert them to semi supervised ones.
+    
     Parameters
     ----------
-    to_split: Dataset
-        Dataset to subset.
+    dataset : torch.utils.data.Dataset
 
-    idx_mapping: array-like
-        Indices of the subset.
+    n_labels : int
+        Number of labels to keep. `-1` keeps all.
 
-    Notes
-    -----
-    - Modified from: https: // gist.github.com / Fuchai / 12f2321e6c8fa53058f5eb23aeddb6ab
-    - Cannot modify the length and targets with indexing anymore! I.e.
-    `d.targets[1]=-1` doesn't work because np.array doesn't allow `arr[i][j]=-1`
-    but you can do `d.targets=targets`
+    unlabeled_class : int, optional
+        Target to give to the unlabeled examples.
+    
+    is_stratify : bool, optional
+        Whether to try to keep the same proportion of classes in the filtered examples.
+
+    seed : int, optional
     """
 
-    def __init__(self, to_split, idx_mapping):
-        self.idx_mapping = idx_mapping
-        self.length = len(idx_mapping)
-        self.to_split = to_split
+    if n_labels == -1:
+        return targets
 
-    def __getitem__(self, index):
-        return self.to_split[self.idx_mapping[index]]
+    stratify = targets if is_stratify else None
+    idcs_unlabel, indcs_labels = train_test_split(
+        list(range(len(targets))), stratify=stratify, test_size=n_labels, random_state=seed
+    )
+
+    targets = copy.deepcopy(targets)
+
+    targets[idcs_unlabel] = unlabeled_class
+
+    return targets
+
+
+class DatasetHelper(Dataset):
+    def __init__(self, data, targets):
+        self.data = data
+        self.targets = targets
 
     def __len__(self):
-        return self.length
+        return len(self.data)
 
-    @property
-    def targets(self):
-        return self.to_split.targets[self.idx_mapping]
-
-    @targets.setter
-    def targets(self, values):
-        self.to_split.targets[self.idx_mapping] = values
-
-    @property
-    def data(self):
-        return self.to_split.data[self.idx_mapping]
-
-    def __getattr__(self, attr):
-        return getattr(self.to_split, attr)
-
+    def __getitem__(self, index):
+        return self.data[index], self.targets[index]
+        
+def subset_dataset(dataset, indcs):
+    """Return a subset dataset (no memory sharing!) ."""
+    dataset = copy.deepcopy(dataset)
+    dataset.data = dataset.data[indcs]
+    dataset.targets = dataset.targets[indcs]
+    return dataset
 
 def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
     """Split a training dataset into a training and validation one.
-
+    
     Parameters
     ----------
-    dev_size: float or int
+    to_split : Dataset
+        Dataset to split. Note that this can be an already splitted dataset.
+    dev_size : float or int, optional
         If float, should be between 0.0 and 1.0 and represent the proportion of
         the dataset to include in the dev split. If int, represents the absolute
         number of dev samples.
-
-    seed: int
+    seed : int, optional
         Random seed.
-
-    is_stratify: bool
+    is_stratify : bool, optional
         Whether to stratify splits based on class label.
     """
     n_all = len(to_split)
     idcs_all = list(range(n_all))
     stratify = to_split.targets if is_stratify else None
-    idcs_train, indcs_val = train_test_split(idcs_all,
-                                             stratify=stratify,
-                                             test_size=dev_size,
-                                             random_state=seed)
-    train = _DatasetSubset(to_split, idcs_train)
-    valid = _DatasetSubset(to_split, indcs_val)
+    idcs_train, indcs_val = train_test_split(
+        idcs_all, stratify=stratify, test_size=dev_size, random_state=seed
+    )
+
+    train = subset_dataset(to_split, idcs_train)
+    valid = subset_dataset(to_split, indcs_val)
+
+    try:
+        valid.rm_augment()  # don't transform validation
+    except:
+        pass
 
     return train, valid
 

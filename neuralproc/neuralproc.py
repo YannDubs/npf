@@ -156,6 +156,7 @@ class NeuralProcess(nn.Module):
         self.PredictiveDistribution = PredictiveDistribution
         self.pred_loc_transformer = pred_loc_transformer
         self.pred_scale_transformer = pred_scale_transformer
+        self.is_transform = False
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -260,6 +261,13 @@ class NeuralProcess(nn.Module):
                         X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()
                     )
                 )
+        elif self.is_transform:
+            if self.encoded_path in ["latent", "both"]:
+                representation = self.latent_path(X_cntxt, Y_cntxt)
+            else:
+                representation = self.deterministic_path(X_cntxt, Y_cntxt, None)
+
+            return representation
 
         R_det, z_sample, q_z_cntxt, q_z_trgt = None, None, None, None
 
@@ -295,6 +303,10 @@ class NeuralProcess(nn.Module):
         # Define sigma following convention in "Empirical Evaluation of Neural
         # Process Objectives".
         mean_z, std_z = z_suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
+
+        if self.is_transform and not self.training:
+            return mean_z
+
         std_z = 0.1 + 0.9 * torch.sigmoid(std_z)
         # use a Gaussian prior on latent
         q_z = MultivariateNormalDiag(mean_z, std_z)
@@ -315,6 +327,9 @@ class NeuralProcess(nn.Module):
 
         # size = [batch_size, r_dim]
         r = torch.mean(R_cntxt, dim=1)
+
+        if self.is_transform and not self.training:
+            return r
 
         batch_size, n_trgt, _ = X_trgt.shape
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
@@ -567,8 +582,20 @@ class ConvolutionalProcess(NeuralProcess):
         # size = [batch_size, n_pseudo, r_dim]
         pseudo_values = self.inp_to_pseudo(keys, pseudo_keys, values)
         pseudo_values = torch.relu(pseudo_values)
-        pseudo_values = self.pseudo_transformer(pseudo_values)
+        out = self.pseudo_transformer(pseudo_values)
+
+        try:
+            pseudo_values, representation = out
+        except:
+            assert (not self.is_transform) or self.training
+            pseudo_values = out
+
         pseudo_values = torch.relu(pseudo_values)
+
+        if self.is_transform and not self.training:
+            # this will be used when `is_transform` in which case `pseudo_transformer` has to output
+            # the representation
+            return representation
 
         # size = [batch_size, n_trgt, r_dim]
         R_attn = self.pseudo_to_out(pseudo_keys, queries, pseudo_values)

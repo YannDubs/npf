@@ -43,6 +43,7 @@ def train_models(
     seed=None,
     datasets_kwargs=dict(),
     models_kwargs=dict(),
+    Trainer=NeuralNet,
     **kwargs
 ):
     """
@@ -210,7 +211,7 @@ def train_models(
                 current_kwargs.update(datasets_kwargs.get(data_name, dict()))
                 current_kwargs.update(models_kwargs.get(model_name, dict()))
 
-                trainer = NeuralNet(model, criterion, **current_kwargs)
+                trainer = Trainer(model, criterion, **current_kwargs)
 
                 if is_retrain:
                     _ = trainer.fit(data_train)

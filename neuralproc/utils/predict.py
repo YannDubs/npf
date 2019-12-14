@@ -61,11 +61,12 @@ class GenNextAutoregressivePixelL1:
     def get_shifted_masks(self, mask):
         """Given a batch of masks , returns the same masks shifted to the right,
         left, up, down."""
+        mask = mask.float()
         right_shifted = torch.cat((mask[:, :, -1:, ...] * 0, mask[:, :, :-1, ...]), dim=2)
         left_shifted = torch.cat((mask[:, :, 1:, ...], mask[:, :, :1, ...] * 0), dim=2)
         up_shifted = torch.cat((mask[:, 1:, :, ...], mask[:, :1, :, ...] * 0), dim=1)
         down_shifted = torch.cat((mask[:, -1:, :, ...] * 0, mask[:, :-1, :, ...]), dim=1)
-        return right_shifted, left_shifted, up_shifted, down_shifted
+        return right_shifted.bool(), left_shifted.bool(), up_shifted.bool(), down_shifted.bool()
 
 
 class AutoregressivePredictor:
