@@ -35,6 +35,7 @@ DATASETS_DICT = {
 }
 DATASETS = list(DATASETS_DICT.keys())
 
+DATA_PATH = "../../../../data/"
 
 
 # HELPERS
@@ -75,14 +76,17 @@ class MyDataset:
                 transforms.Resize((self.shape[1], self.shape[2])),
                 transforms.RandomCrop((self.shape[1], self.shape[2]), padding=4),
                 # don't flip if working with numbers
-                transforms.RandomHorizontalFlip() if not self.is_numbers else torch.nn.Identity(),
+                transforms.RandomHorizontalFlip()
+                if not self.is_numbers
+                else torch.nn.Identity(),
                 transforms.RandomRotation(15),
-                transforms.ToTensor()
+                transforms.ToTensor(),
             ]
         else:
             transforms_list = [
-                    transforms.Resize((self.shape[1], self.shape[2])),
-                    transforms.ToTensor()]
+                transforms.Resize((self.shape[1], self.shape[2])),
+                transforms.ToTensor(),
+            ]
 
         super().__init__(*args, transform=transforms.Compose(transforms_list), **kwargs)
 
@@ -93,9 +97,10 @@ class MyDataset:
     def rm_augment(self):
         """Remove data augmentation for testing."""
         transforms_list = [
-                    transforms.Resize((self.shape[1], self.shape[2])),
-                    transforms.ToTensor()]
-        
+            transforms.Resize((self.shape[1], self.shape[2])),
+            transforms.ToTensor(),
+        ]
+
         self.transform = transforms.Compose(transforms_list)
 
     def __getitem__(self, index):
@@ -109,6 +114,7 @@ class MyDataset:
                 y = [y, index]
 
         return out[0], y
+
 
 # TORCHVISION DATASETS
 class SVHN(MyDataset, datasets.SVHN):
@@ -133,7 +139,7 @@ class SVHN(MyDataset, datasets.SVHN):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         logger=logging.getLogger(__name__),
         split="train",
         **kwargs,
@@ -173,7 +179,7 @@ class CIFAR10(MyDataset, datasets.CIFAR10):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         logger=logging.getLogger(__name__),
         split="train",
         **kwargs,
@@ -206,7 +212,7 @@ class CIFAR100(MyDataset, datasets.CIFAR100):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs,
@@ -239,7 +245,7 @@ class MNIST(MyDataset, datasets.MNIST):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs,
@@ -271,7 +277,7 @@ class FashionMNIST(MyDataset, datasets.FashionMNIST):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs,
@@ -280,6 +286,7 @@ class FashionMNIST(MyDataset, datasets.FashionMNIST):
         self.is_train = split == "train"
         super().__init__(root, train=self.is_train, download=True, **kwargs)
         self.targets = to_numpy(self.targets)
+
 
 # GENERATED DATASETS
 class ZeroShotMultiMNIST(Dataset):
@@ -321,14 +328,14 @@ class ZeroShotMultiMNIST(Dataset):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DATA_PATH),
         transforms_list=[],
         split="train",
         n_test_digits=2,
         final_size=None,
         seed=123,
         logger=logging.getLogger(__name__),
-        **kwargs
+        **kwargs,
     ):
 
         self.dir = os.path.join(root, self.name)
@@ -340,7 +347,8 @@ class ZeroShotMultiMNIST(Dataset):
         self._init_size = 28
 
         saved_data = os.path.join(
-            self.dir, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits)
+            self.dir,
+            "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits),
         )
 
         try:
@@ -376,12 +384,18 @@ class ZeroShotMultiMNIST(Dataset):
         set_seed(self.seed)
         fin_img_size = self._init_size * self.n_test_digits
         init_img_size = train_dataset.shape[1:]
-        background = np.zeros((train_dataset.size(0), fin_img_size, fin_img_size)).astype(np.uint8)
+        background = np.zeros(
+            (train_dataset.size(0), fin_img_size, fin_img_size)
+        ).astype(np.uint8)
         borders = (np.array((fin_img_size, fin_img_size)) - init_img_size) // 2
-        background[:, borders[0] : -borders[0], borders[1] : -borders[1]] = train_dataset
+        background[
+            :, borders[0] : -borders[0], borders[1] : -borders[1]
+        ] = train_dataset
         return torch.from_numpy(background)
 
-    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
+    def make_multi_mnist_test(
+        self, test_dataset, varying_axis=None, n_test_digits=None
+    ):
         """
         Test set of multi mnist by concatenating moving digits around `varying_axis`
         (both axis if `None`) and concatenating them over the other. `n_test_digits` is th enumber
@@ -409,12 +423,16 @@ class ZeroShotMultiMNIST(Dataset):
 
         tmp_img_size = list(test_dataset.shape[1:])
         tmp_img_size[varying_axis] = fin_img_size
-        tmp_background = torch.from_numpy(np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8))
+        tmp_background = torch.from_numpy(
+            np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8)
+        )
 
         max_shift = fin_img_size - init_img_size[varying_axis]
         shifts = np.random.randint(max_shift, size=n_test_digits * n_test)
 
-        test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[torch.randperm(n_tmp)]
+        test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[
+            torch.randperm(n_tmp)
+        ]
 
         for i, shift in enumerate(shifts):
             slices = [slice(None), slice(None)]
@@ -476,7 +494,9 @@ class ZeroShotMNIST(ZeroShotMultiMNIST):
     files = {"train": "train", "test": "test"}
     name = "ZeroShotMNIST"
 
-    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
+    def make_multi_mnist_test(
+        self, test_dataset, varying_axis=None, n_test_digits=None
+    ):
         """
         Like multi mnist but only shows a single digit.
         """
@@ -557,14 +577,16 @@ class CelebA64(ExternalDataset):
 
     """
 
-    urls = {"train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"}
+    urls = {
+        "train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"
+    }
     files = {"train": "img_align_celeba"}
     shape = (3, 64, 64)
     missing_px_color = COLOUR_BLACK
     n_classes = 0  # not classification
     name = "celeba64"
 
-    def __init__(self, root=os.path.join(DIR, "../../data/"), **kwargs):
+    def __init__(self, root=os.path.join(DIR, DATA_PATH), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
         self.imgs = glob.glob(self.train_data + "/*")
@@ -575,7 +597,9 @@ class CelebA64(ExternalDataset):
         os.makedirs(self.dir)
 
         try:
-            subprocess.check_call(["curl", "-L", type(self).urls["train"], "--output", save_path])
+            subprocess.check_call(
+                ["curl", "-L", type(self).urls["train"], "--output", save_path]
+            )
         except FileNotFoundError as e:
             raise Exception(e + " Please instal curl with `apt-get install curl`...")
 
@@ -631,4 +655,3 @@ class CelebA(CelebA64):
     # use the default ones
     def preprocess(self):
         pass
-

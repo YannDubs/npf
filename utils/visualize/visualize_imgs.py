@@ -17,7 +17,11 @@ from utils.data import cntxt_trgt_collate
 from utils.helpers import set_seed, tuple_cont_to_cont_tuple
 from utils.train import EVAL_FILENAME
 
-__all__ = ["plot_dataset_samples_imgs", "plot_posterior_img", "plot_qualitative_with_kde"]
+__all__ = [
+    "plot_dataset_samples_imgs",
+    "plot_posterior_img",
+    "plot_qualitative_with_kde",
+]
 
 DFLT_FIGSIZE = (17, 9)
 
@@ -124,7 +128,9 @@ def plot_posterior_img(
         n_plots = len(img_indcs)
         imgs = [data[i] for i in img_indcs]
 
-        cntxt_trgt = cntxt_trgt_collate(get_cntxt_trgt, is_return_masks=is_uniform_grid)(imgs)[0]
+        cntxt_trgt = cntxt_trgt_collate(
+            get_cntxt_trgt, is_return_masks=is_uniform_grid
+        )(imgs)[0]
         mask_cntxt, X, mask_trgt, _ = (
             cntxt_trgt["X_cntxt"],
             cntxt_trgt["Y_cntxt"],
@@ -143,7 +149,9 @@ def plot_posterior_img(
 
     if is_uniform_grid:
         background = (
-            data.missing_px_color.view(1, *[1] * dim_grid, 3).expand(*mean_y.shape).clone()
+            data.missing_px_color.view(1, *[1] * dim_grid, 3)
+            .expand(*mean_y.shape)
+            .clone()
         )
         out_cntxt = torch.where(mask_cntxt, X, background)
 
@@ -206,13 +214,17 @@ def plot_qualitative_with_kde(
         n_images = len(percentiles)
 
     plt.rcParams.update({"font.size": font_size})
-    fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw={"height_ratios": height_ratios})
+    fig, axes = plt.subplots(
+        2, 1, figsize=figsize, gridspec_kw={"height_ratios": height_ratios}
+    )
 
     def _plot_kde_loglike(name, trainer):
         chckpnt_dirname = dict(trainer.callbacks_)["Checkpoint"].dirname
         test_eval_file = os.path.join(chckpnt_dirname, EVAL_FILENAME)
         test_loglike = np.loadtxt(test_eval_file, delimiter=",")
-        sns.kdeplot(test_loglike, ax=axes[0], shade=True, label=name, cut=0, **kdeplot_kwargs)
+        sns.kdeplot(
+            test_loglike, ax=axes[0], shade=True, label=name, cut=0, **kdeplot_kwargs
+        )
         sns.despine()
         return test_loglike
 
@@ -222,7 +234,9 @@ def plot_qualitative_with_kde(
             X_cntxt, Y_cntxt = GridCntxtTrgtGetter.select(
                 None, X, None, selected_data["X_cntxt"][i]
             )
-            X_trgt, Y_trgt = GridCntxtTrgtGetter.select(None, X, None, selected_data["X_trgt"][i])
+            X_trgt, Y_trgt = GridCntxtTrgtGetter.select(
+                None, X, None, selected_data["X_trgt"][i]
+            )
             yield dict(X_cntxt=X_cntxt, Y_cntxt=Y_cntxt, X_trgt=X_trgt, Y_trgt=Y_trgt)
 
     def _plot_posterior_img_selected(name, trainer, selected_data, is_grided_trainer):
@@ -346,7 +360,9 @@ def plot_qualitative_with_kde(
             if next_idx != i:
                 continue
 
-            selected_data.append({k: v[cur_idx : cur_idx + 1, ...] for k, v in Xi.items()})
+            selected_data.append(
+                {k: v[cur_idx : cur_idx + 1, ...] for k, v in Xi.items()}
+            )
 
             if len(queue) == 0:
                 break
@@ -377,7 +393,9 @@ def plot_qualitative_with_kde(
         grid_compare = _plot_posterior_img_selected(
             *named_trainer_compare, selected_data, is_grided_trainer
         )
-        grid = torch.cat((grid, grid_compare[:, grid_compare.size(1) // 2 + 1 :, :]), dim=1)
+        grid = torch.cat(
+            (grid, grid_compare[:, grid_compare.size(1) // 2 + 1 :, :]), dim=1
+        )
 
         y_ticks += [middle_img * 5]
         y_ticks_labels += [named_trainer_compare[0]]
@@ -392,7 +410,10 @@ def plot_qualitative_with_kde(
     if percentiles is not None:
         axes[1].xaxis.set_major_locator(
             ticker.FixedLocator(
-                [(dataset.shape[2] // 2 + 1) * (i * 2 + 1) for i, p in enumerate(percentiles)]
+                [
+                    (dataset.shape[2] // 2 + 1) * (i * 2 + 1)
+                    for i, p in enumerate(percentiles)
+                ]
             )
         )
         axes[1].set_xticklabels(["{}%".format(p) for p in percentiles])
@@ -436,4 +457,3 @@ def points_to_grid(X, Y, grid_shape, background=torch.tensor([0.0, 0.0, 0.0])):
     background = background.view(batch_size, *grid_shape, y_dim)
 
     return background, mask.view(batch_size, *grid_shape, 1)
-
