@@ -4,8 +4,12 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import make_depth_sep_conv, channels_to_2nd_dim, channels_to_last_dim
+from neuralproc.utils.helpers import (
+    channels_to_2nd_dim,
+    channels_to_last_dim,
+    make_depth_sep_conv,
+)
+from neuralproc.utils.initialization import init_param_, weights_init
 
 __all__ = [
     "GaussianConv2d",
@@ -23,7 +27,9 @@ class GaussianConv2d(nn.Module):
         self.kwargs = kwargs
         assert kernel_size % 2 == 1
         self.kernel_sizes = (kernel_size, kernel_size)
-        self.exponent = -(torch.arange(0, kernel_size).view(-1, 1).float() - kernel_size // 2) ** 2
+        self.exponent = -(
+            (torch.arange(0, kernel_size).view(-1, 1).float() - kernel_size // 2) ** 2
+        )
 
         self.reset_parameters()
 
@@ -40,7 +46,9 @@ class GaussianConv2d(nn.Module):
 
         in_chan = X.size(1)
         filters = marginal_x @ marginal_y
-        filters = filters.view(1, 1, *self.kernel_sizes).expand(in_chan, 1, *self.kernel_sizes)
+        filters = filters.view(1, 1, *self.kernel_sizes).expand(
+            in_chan, 1, *self.kernel_sizes
+        )
 
         return F.conv2d(X, filters, groups=in_chan, **self.kwargs)
 
@@ -129,7 +137,7 @@ class ConvBlock(nn.Module):
 
 
 class ResConvBlock(nn.Module):
-    """Convolutional block (2 layers) inspired by the pre-activation Resnet [1]
+    """Convolutional block inspired by the pre-activation Resnet [1]
     and depthwise separable convolutions [2].
 
     Parameters
@@ -151,6 +159,9 @@ class ResConvBlock(nn.Module):
 
     Normalization : nn.Module, optional
         Normalization layer (unitialized). E.g. `nn.BatchNorm1d`.
+
+    n_conv_layers : int, optional
+        Number of convolutional layers, can be 1 or 2.
 
     is_bias : bool, optional
         Whether to use a bias.
@@ -179,9 +190,12 @@ class ResConvBlock(nn.Module):
         Normalization=nn.Identity,
         is_bias=True,
         Padder=None,
+        n_conv_layers=1,
     ):
         super().__init__()
         self.activation = activation
+        self.n_conv_layers = n_conv_layers
+        assert self.n_conv_layers in [1, 2]
 
         if kernel_size % 2 == 0:
             raise ValueError("`kernel_size={}`, but should be odd.".format(kernel_size))
@@ -194,10 +208,11 @@ class ResConvBlock(nn.Module):
         else:
             self.padder = nn.Identity()
 
-        self.norm1 = Normalization(in_chan)
-        self.conv1 = make_depth_sep_conv(Conv)(
-            in_chan, in_chan, kernel_size, padding=padding, bias=is_bias
-        )
+        if self.n_conv_layers == 2:
+            self.norm1 = Normalization(in_chan)
+            self.conv1 = make_depth_sep_conv(Conv)(
+                in_chan, in_chan, kernel_size, padding=padding, bias=is_bias
+            )
         self.norm2 = Normalization(in_chan)
         self.conv2_depthwise = Conv(
             in_chan, in_chan, kernel_size, padding=padding, groups=in_chan, bias=is_bias
@@ -210,10 +225,12 @@ class ResConvBlock(nn.Module):
         weights_init(self)
 
     def forward(self, X):
+        if self.n_conv_layers == 2:
+            out = self.padder(X)
+            X = self.conv1(self.activation(self.norm1(out)))
+
         out = self.padder(X)
-        out = self.conv1(self.activation(self.norm1(X)))
-        out = self.padder(out)
-        out = self.conv2_depthwise(self.activation(self.norm2(X)))
+        out = self.conv2_depthwise(self.activation(self.norm2(out)))
         # adds residual before point wise => output can change number of channels
         out = out + X
         out = self.conv2_pointwise(out)
@@ -254,7 +271,14 @@ class ResNormalizedConvBlock(ResConvBlock):
     """
 
     def __init__(
-        self, in_chan, out_chan, Conv, kernel_size=5, activation=nn.ReLU(), is_bias=True, **kwargs
+        self,
+        in_chan,
+        out_chan,
+        Conv,
+        kernel_size=5,
+        activation=nn.ReLU(),
+        is_bias=True,
+        **kwargs
     ):
         super().__init__(
             in_chan,
@@ -293,7 +317,9 @@ class ResNormalizedConvBlock(ResConvBlock):
         # adds residual before point wise => output can change number of channels
 
         # make sure that confidence cannot decrease and cannot be greater than 1
-        conf_2 = conf_1 + torch.sigmoid(density * F.softplus(self.temperature) + self.bias)
+        conf_2 = conf_1 + torch.sigmoid(
+            density * F.softplus(self.temperature) + self.bias
+        )
         conf_2 = conf_2.clamp(max=1)
         out = out + X
 
@@ -334,7 +360,10 @@ class CNN(nn.Module):
         self.is_chan_last = is_chan_last
         self.in_out_channels = self._get_in_out_channels(n_channels, n_blocks)
         self.conv_blocks = nn.ModuleList(
-            [ConvBlock(in_chan, out_chan, **kwargs) for in_chan, out_chan in self.in_out_channels]
+            [
+                ConvBlock(in_chan, out_chan, **kwargs)
+                for in_chan, out_chan in self.in_out_channels
+            ]
         )
         self.is_return_rep = False  # never return representation for vanilla conv
 
@@ -473,9 +502,14 @@ class UnetCNN(CNN):
         # Up
         for i in range(n_down_blocks + 1, self.n_blocks):
             X = F.interpolate(
-                X, mode=self.upsample_mode, scale_factor=self.pooling_size, align_corners=True
+                X,
+                mode=self.upsample_mode,
+                scale_factor=self.pooling_size,
+                align_corners=True,
             )
-            X = torch.cat((X, residuals[n_down_blocks - i]), dim=1)  # concat on channels
+            X = torch.cat(
+                (X, residuals[n_down_blocks - i]), dim=1
+            )  # concat on channels
             X = self.conv_blocks[i](X)
 
         return X, representation

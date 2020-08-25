@@ -2,37 +2,39 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 import sklearn
-
-sys.path.append("..")
+import torch
 
 from neuralproc.utils.helpers import rescale_range
 from utils.helpers import set_seed
 
+sys.path.append("..")
+
+
 DFLT_FIGSIZE = (11, 5)
 
-__all__ = ["plot_dataset_samples_1d", "plot_prior_samples_1d",
-           "plot_posterior_samples_1d", "plot_losses"]
+__all__ = [
+    "plot_dataset_samples_1d",
+    "plot_prior_samples_1d",
+    "plot_posterior_samples_1d",
+    "plot_losses",
+]
 
 
-def plot_losses(history,
-                title=None,
-                figsize=DFLT_FIGSIZE,
-                ax=None,
-                mode="both",
-                label_sfx=""):
+def plot_losses(
+    history, title=None, figsize=DFLT_FIGSIZE, ax=None, mode="both", label_sfx=""
+):
     """Plot the `training`, `validation` or `both` losses given a skorch history."""
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
 
     if mode in ["both", "validation"]:
-        valid_losses = [ep['valid_loss'] for ep in history]
+        valid_losses = [ep["valid_loss"] for ep in history]
         ax.plot(valid_losses, label="Validation" + label_sfx)
 
     if mode in ["both", "training"]:
-        train_losses = [ep['train_loss'] for ep in history]
+        train_losses = [ep["train_loss"] for ep in history]
         ax.plot(train_losses, label="Training" + label_sfx)
 
     ax.legend()
@@ -43,29 +45,28 @@ def plot_losses(history,
         ax.set_title(title)
 
 
-def plot_dataset_samples_1d(dataset, n_samples=50, title="Dataset",
-                            figsize=DFLT_FIGSIZE, ax=None):
+def plot_dataset_samples_1d(
+    dataset, n_samples=50, title="Dataset", figsize=DFLT_FIGSIZE, ax=None
+):
     """Plot `n_samples` samples of the a datset."""
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    alpha = 1 / (n_samples + 1)**0.5
+    alpha = 1 / (n_samples + 1) ** 0.5
 
     for i in range(n_samples):
         x, y = dataset[i]
         x = rescale_range(x, (-1, 1), dataset.min_max)
-        ax.plot(x.numpy(), y.numpy(), c='b', alpha=alpha)
+        ax.plot(x.numpy(), y.numpy(), c="b", alpha=alpha)
         ax.set_xlim(*dataset.min_max)
 
     if title is not None:
         ax.set_title(title, fontsize=14)
 
 
-def plot_prior_samples_1d(model,
-                          test_min_max=None,
-                          train_min_max=(-2, 2),
-                          n_trgt=256,
-                          **kwargs):
+def plot_prior_samples_1d(
+    model, test_min_max=None, train_min_max=(-2, 2), n_trgt=256, **kwargs
+):
     """
     Plot the mean at `n_trgt` different points for `n_samples`
     different latents (i.e. sampled functions).
@@ -77,19 +78,23 @@ def plot_prior_samples_1d(model,
     X_trgt = torch.Tensor(np.linspace(*input_min_max, n_trgt))
     X_trgt = X_trgt.view(1, -1, 1)
 
-    ax = _plot_posterior_predefined_cntxt(model, None, None, X_trgt,
-                                          **kwargs)
+    ax = _plot_posterior_predefined_cntxt(model, None, None, X_trgt, **kwargs)
 
 
-def plot_posterior_samples_1d(X, Y, get_cntxt_trgt, model,
-                              compare_model=None,
-                              model_labels=["Model", "Compare"],
-                              generator=None,
-                              is_plot_real=True,
-                              train_min_max=(-2, 2),
-                              ax=None,
-                              seed=None,
-                              **kwargs):
+def plot_posterior_samples_1d(
+    X,
+    Y,
+    get_cntxt_trgt,
+    model,
+    compare_model=None,
+    model_labels=["Model", "Compare"],
+    generator=None,
+    is_plot_real=True,
+    train_min_max=(-2, 2),
+    ax=None,
+    seed=None,
+    **kwargs
+):
     """
     Plot and compare (samples from) the conditional posterior predictive estimated
     by some models at random cntxt and target points.
@@ -135,23 +140,33 @@ def plot_posterior_samples_1d(X, Y, get_cntxt_trgt, model,
 
     alpha_init = 1 if compare_model is None else 0.5
 
-    ax = _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
-                                          train_min_max=train_min_max,
-                                          Y_trgt=Y_trgt if is_plot_real else None,
-                                          model_label=model_labels[0],
-                                          alpha_init=alpha_init,
-                                          mean_std_colors=("b", 'tab:blue'),
-                                          ax=ax,
-                                          **kwargs)
+    ax = _plot_posterior_predefined_cntxt(
+        model,
+        X_cntxt,
+        Y_cntxt,
+        X_trgt,
+        train_min_max=train_min_max,
+        Y_trgt=Y_trgt if is_plot_real else None,
+        model_label=model_labels[0],
+        alpha_init=alpha_init,
+        mean_std_colors=("b", "tab:blue"),
+        ax=ax,
+        **kwargs
+    )
 
     if compare_model is not None:
-        ax = _plot_posterior_predefined_cntxt(compare_model, X_cntxt, Y_cntxt, X_trgt,
-                                              train_min_max=train_min_max,
-                                              model_label=model_labels[1],
-                                              ax=ax,
-                                              alpha_init=alpha_init,
-                                              mean_std_colors=("m", 'tab:pink'),
-                                              **kwargs)
+        ax = _plot_posterior_predefined_cntxt(
+            compare_model,
+            X_cntxt,
+            Y_cntxt,
+            X_trgt,
+            train_min_max=train_min_max,
+            model_label=model_labels[1],
+            ax=ax,
+            alpha_init=alpha_init,
+            mean_std_colors=("m", "tab:pink"),
+            **kwargs
+        )
 
     if generator is not None:
         X_cntxt_plot = rescale_range(X_cntxt, (-1, 1), train_min_max).numpy()[0]
@@ -161,16 +176,31 @@ def plot_posterior_samples_1d(X, Y, get_cntxt_trgt, model,
         X_trgt_plot = rescale_range(X, (-1, 1), train_min_max).numpy()[0].flatten()
         mean_y, std_y = generator.predict(X_trgt_plot[:, np.newaxis], return_std=True)
         mean_y = mean_y.flatten()
-        ax.plot(X_trgt_plot, mean_y, alpha=alpha_init / 2, c="g", label="Generator's Predictions")
-        ax.fill_between(X_trgt_plot, mean_y - std_y, mean_y + std_y,
-                        alpha=alpha_init / 10, color='tab:green')
+        ax.plot(
+            X_trgt_plot,
+            mean_y,
+            alpha=alpha_init / 2,
+            c="g",
+            label="Generator's Predictions",
+        )
+        ax.fill_between(
+            X_trgt_plot,
+            mean_y - std_y,
+            mean_y + std_y,
+            alpha=alpha_init / 10,
+            color="tab:green",
+        )
         ax.legend()
 
 
 def _check_input(*inp):
     for x in inp:
         if (x is not None) and not (x.dim() == 3 and x.dim() == 3 and x.shape[0] == 1):
-            raise ValueError("input should have 3 dim with first (batch size) of 0, but `x.shape={}`.".format(x.shape))
+            raise ValueError(
+                "input should have 3 dim with first (batch size) of 0, but `x.shape={}`.".format(
+                    x.shape
+                )
+            )
 
 
 def _rescale_ylim(y_min, y_max):
@@ -199,17 +229,22 @@ def _get_p_y_pred(model, X_cntxt, Y_cntxt, X_trgt):
     return p_y_pred
 
 
-def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
-                                     Y_trgt=None,
-                                     n_samples=50,
-                                     is_plot_std=False,
-                                     train_min_max=(-2, 2),
-                                     model_label="Model",
-                                     alpha_init=1,
-                                     mean_std_colors=("b", 'tab:blue'),
-                                     title=None,
-                                     figsize=DFLT_FIGSIZE,
-                                     ax=None):
+def _plot_posterior_predefined_cntxt(
+    model,
+    X_cntxt,
+    Y_cntxt,
+    X_trgt,
+    Y_trgt=None,
+    n_samples=50,
+    is_plot_std=True,
+    train_min_max=(-2, 2),
+    model_label="Model",
+    alpha_init=1,
+    mean_std_colors=("b", "tab:blue"),
+    title=None,
+    figsize=DFLT_FIGSIZE,
+    ax=None,
+):
     """
     Plot (samples from) the conditional posterior predictive estimated by a model.
 
@@ -277,7 +312,7 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
         X_cntxt_plot = rescale_range(X_cntxt_plot, (-1, 1), train_min_max)
 
     # make alpha dependent on number of samples
-    alpha = alpha_init / (n_samples)**0.5
+    alpha = alpha_init / (n_samples) ** 0.5
 
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -293,14 +328,24 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
 
         if i == 0:
             # only add single label
-            ax.plot(X_trgt_plot, mean_y, alpha=alpha, c=mean_color,
-                    label="{}'s Predictions".format(model_label))
+            ax.plot(
+                X_trgt_plot,
+                mean_y,
+                alpha=alpha,
+                c=mean_color,
+                label="{}'s Predictions".format(model_label),
+            )
         else:
             ax.plot(X_trgt_plot, mean_y, alpha=alpha, c=mean_color)
 
         if is_plot_std:
-            ax.fill_between(X_trgt_plot, mean_y - std_y, mean_y + std_y,
-                            alpha=alpha / 7, color=std_color)
+            ax.fill_between(
+                X_trgt_plot,
+                mean_y - std_y,
+                mean_y + std_y,
+                alpha=alpha / 7,
+                color=std_color,
+            )
             y_min = min(y_min, (mean_y - std_y)[X_interp].min())
             y_max = max(y_max, (mean_y + std_y)[X_interp].max())
         else:
@@ -312,12 +357,12 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
         X_trgt = X_trgt.numpy()[0].flatten()
         Y_trgt = Y_trgt.numpy()[0, :, 0].flatten()
         X_trgt_plot = rescale_range(X_trgt, (-1, 1), train_min_max)
-        ax.plot(X_trgt_plot, Y_trgt, "--k", alpha=0.7, label='Target Function')
+        ax.plot(X_trgt_plot, Y_trgt, "--k", alpha=0.7, label="Target Function")
         y_min = min(y_min, Y_trgt.min())
         y_max = max(y_max, Y_trgt.max())
 
     if is_conditioned:
-        ax.scatter(X_cntxt_plot, Y_cntxt[0, :, 0].numpy(), c='k')
+        ax.scatter(X_cntxt_plot, Y_cntxt[0, :, 0].numpy(), c="k")
         x_min = min(min(X_cntxt_plot), x_min)
         x_max = max(max(X_cntxt_plot), x_max)
 
@@ -327,12 +372,22 @@ def _plot_posterior_predefined_cntxt(model, X_cntxt, Y_cntxt, X_trgt,
     ax.set_ylim(_rescale_ylim(y_min, y_max))
 
     if x_max > train_min_max[1]:  # right extrapolation
-        ax.axvline(x=train_min_max[1], color='r', linestyle=':', alpha=alpha_init / 2,
-                   label='Interpolation-Extrapolation boundary')
+        ax.axvline(
+            x=train_min_max[1],
+            color="r",
+            linestyle=":",
+            alpha=alpha_init / 2,
+            label="Interpolation-Extrapolation boundary",
+        )
 
     if x_min < train_min_max[0]:  # left extrapolation
-        ax.axvline(x=train_min_max[0], color='r', linestyle=':', alpha=alpha_init / 2,
-                   label='Interpolation-Extrapolation boundary')
+        ax.axvline(
+            x=train_min_max[0],
+            color="r",
+            linestyle=":",
+            alpha=alpha_init / 2,
+            label="Interpolation-Extrapolation boundary",
+        )
 
     if title is not None:
         ax.set_title(title, fontsize=14)

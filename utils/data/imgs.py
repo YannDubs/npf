@@ -1,23 +1,23 @@
-import subprocess
-import os
 import abc
-import hashlib
-import zipfile
 import glob
+import hashlib
 import logging
+import os
+import subprocess
+import zipfile
 
 import matplotlib.pyplot as plt
-from PIL import Image
-from tqdm import tqdm
-import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms, datasets
-
+import torch
+from PIL import Image
 from skorch.utils import to_numpy
+from torch.utils.data import DataLoader, Dataset
+from torchvision import datasets, transforms
+from tqdm import tqdm
 
 from utils.helpers import set_seed
-from .helpers import random_translation, preprocess
+
+from .helpers import preprocess, random_translation
 
 DIR = os.path.abspath(os.path.dirname(__file__))
 COLOUR_BLACK = torch.tensor([0.0, 0.0, 0.0])
@@ -33,6 +33,7 @@ DATASETS_DICT = {
     "celeba": "CelebA",
 }
 DATASETS = list(DATASETS_DICT.keys())
+DIR_DATA = "../../../../data/"
 
 
 # HELPERS
@@ -86,7 +87,7 @@ class SVHN(datasets.SVHN):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DIR_DATA),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs
@@ -143,7 +144,7 @@ class MNIST(datasets.MNIST):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DIR_DATA),
         split="train",
         logger=logging.getLogger(__name__),
         **kwargs
@@ -206,7 +207,7 @@ class ZeroShotMultiMNIST(Dataset):
 
     def __init__(
         self,
-        root=os.path.join(DIR, "../../data/"),
+        root=os.path.join(DIR, DIR_DATA),
         transforms_list=[],
         split="train",
         n_test_digits=2,
@@ -225,7 +226,8 @@ class ZeroShotMultiMNIST(Dataset):
         self._init_size = 28
 
         saved_data = os.path.join(
-            self.dir, "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits)
+            self.dir,
+            "{}_seed{}_digits{}.pt".format(self.files[split], seed, n_test_digits),
         )
 
         try:
@@ -234,7 +236,6 @@ class ZeroShotMultiMNIST(Dataset):
             if not os.path.exists(self.dir):
                 os.mkdir(self.dir)
             mnist = datasets.MNIST(root=root, train=split == "train", download=True)
-            breakpoint()
             self.logger.info("Generating ZeroShotMultiMNIST {} split.".format(split))
             if split == "train":
                 self.data = self.make_multi_mnist_train(mnist.data, **kwargs)
@@ -261,12 +262,18 @@ class ZeroShotMultiMNIST(Dataset):
         set_seed(self.seed)
         fin_img_size = self._init_size * self.n_test_digits
         init_img_size = train_dataset.shape[1:]
-        background = np.zeros((train_dataset.size(0), fin_img_size, fin_img_size)).astype(np.uint8)
+        background = np.zeros(
+            (train_dataset.size(0), fin_img_size, fin_img_size)
+        ).astype(np.uint8)
         borders = (np.array((fin_img_size, fin_img_size)) - init_img_size) // 2
-        background[:, borders[0] : -borders[0], borders[1] : -borders[1]] = train_dataset
+        background[
+            :, borders[0] : -borders[0], borders[1] : -borders[1]
+        ] = train_dataset
         return torch.from_numpy(background)
 
-    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
+    def make_multi_mnist_test(
+        self, test_dataset, varying_axis=None, n_test_digits=None
+    ):
         """
         Test set of multi mnist by concatenating moving digits around `varying_axis`
         (both axis if `None`) and concatenating them over the other. `n_test_digits` is th enumber
@@ -294,12 +301,16 @@ class ZeroShotMultiMNIST(Dataset):
 
         tmp_img_size = list(test_dataset.shape[1:])
         tmp_img_size[varying_axis] = fin_img_size
-        tmp_background = torch.from_numpy(np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8))
+        tmp_background = torch.from_numpy(
+            np.zeros((n_tmp, *tmp_img_size)).astype(np.uint8)
+        )
 
         max_shift = fin_img_size - init_img_size[varying_axis]
         shifts = np.random.randint(max_shift, size=n_test_digits * n_test)
 
-        test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[torch.randperm(n_tmp)]
+        test_dataset = test_dataset.repeat(self.n_test_digits, 1, 1)[
+            torch.randperm(n_tmp)
+        ]
 
         for i, shift in enumerate(shifts):
             slices = [slice(None), slice(None)]
@@ -361,7 +372,9 @@ class ZeroShotMNIST(ZeroShotMultiMNIST):
     files = {"train": "train", "test": "test"}
     name = "ZeroShotMNIST"
 
-    def make_multi_mnist_test(self, test_dataset, varying_axis=None, n_test_digits=None):
+    def make_multi_mnist_test(
+        self, test_dataset, varying_axis=None, n_test_digits=None
+    ):
         """
         Like multi mnist but only shows a single digit.
         """
@@ -442,14 +455,16 @@ class CelebA64(ExternalDataset):
 
     """
 
-    urls = {"train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"}
+    urls = {
+        "train": "https://s3-us-west-1.amazonaws.com/udacity-dlnfd/datasets/celeba.zip"
+    }
     files = {"train": "img_align_celeba"}
     shape = (3, 64, 64)
     missing_px_color = COLOUR_BLACK
     n_classes = 0  # not classification
     name = "celeba64"
 
-    def __init__(self, root=os.path.join(DIR, "../../data/"), **kwargs):
+    def __init__(self, root=os.path.join(DIR, DIR_DATA), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
         self.imgs = glob.glob(self.train_data + "/*")
@@ -460,7 +475,9 @@ class CelebA64(ExternalDataset):
         os.makedirs(self.dir)
 
         try:
-            subprocess.check_call(["curl", "-L", type(self).urls["train"], "--output", save_path])
+            subprocess.check_call(
+                ["curl", "-L", type(self).urls["train"], "--output", save_path]
+            )
         except FileNotFoundError as e:
             raise Exception(e + " Please instal curl with `apt-get install curl`...")
 
@@ -511,9 +528,8 @@ class CelebA32(CelebA64):
 
 class CelebA(CelebA64):
     shape = (3, 218, 178)
-    name = "celeba128"
+    name = "celeba"
 
     # use the default ones
     def preprocess(self):
         pass
-

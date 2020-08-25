@@ -12,10 +12,19 @@ from skorch.callbacks import ProgressBar
 import torch.nn as nn
 import torch.nn.functional as F
 
-from neuralproc import RegularGridsConvolutionalProcess, AttentiveNeuralProcess, NeuralProcessLoss
+from neuralproc import (
+    RegularGridsConvolutionalProcess,
+    AttentiveNeuralProcess,
+    NeuralProcessLoss,
+)
 from neuralproc.predefined import CNN, SelfAttention, MLP, ResConvBlock, GaussianConv2d
 from neuralproc import merge_flat_input
-from neuralproc.utils.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
+from neuralproc.utils.datasplit import (
+    GridCntxtTrgtGetter,
+    RandomMasker,
+    no_masker,
+    half_masker,
+)
 from neuralproc.utils.predict import GenAllAutoregressivePixel
 from neuralproc.utils.helpers import (
     MultivariateNormalDiag,
@@ -66,12 +75,14 @@ def _get_train_kwargs(model_name, **kwargs):
 
     if "AttnCNP" in model_name:
         dflt_kwargs = dict(
-            iterator_train__collate_fn=dflt_collate, iterator_valid__collate_fn=dflt_collate
+            iterator_train__collate_fn=dflt_collate,
+            iterator_valid__collate_fn=dflt_collate,
         )
 
     elif "GridedCCP" in model_name:
         dflt_kwargs = dict(
-            iterator_train__collate_fn=masked_collate, iterator_valid__collate_fn=masked_collate
+            iterator_train__collate_fn=masked_collate,
+            iterator_valid__collate_fn=masked_collate,
         )
 
     dflt_kwargs.update(kwargs)
@@ -91,6 +102,7 @@ def get_model(
     is_no_abs=False,
     is_circular_padding=False,
     is_bias=True,
+    n_conv_layers=1,
 ):
     """Return the correct model."""
 
@@ -106,7 +118,10 @@ def get_model(
 
     # MODEL
     AttnCNP = partial(
-        AttentiveNeuralProcess, x_dim=x_dim, attention="transformer", **neuralproc_kwargs
+        AttentiveNeuralProcess,
+        x_dim=x_dim,
+        attention="transformer",
+        **neuralproc_kwargs,
     )
 
     Padder = CircularPad2d if is_circular_padding else None
@@ -115,7 +130,9 @@ def get_model(
         model = AttnCNP
 
     elif model_name == "SelfAttnCNP":
-        model = partial(AttnCNP, XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True))
+        model = partial(
+            AttnCNP, XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True)
+        )
 
     elif model_name == "GridedCCP":
         denom = 10
@@ -165,6 +182,7 @@ def get_model(
                 kernel_size=kernel_size,
                 n_blocks=n_blocks,
                 is_bias=is_bias,
+                n_conv_layers=n_conv_layers,
             ),
             is_density=not is_no_density,
             is_normalization=not is_no_normalization,
@@ -218,9 +236,12 @@ def main(args):
         is_no_abs=args.is_no_abs,
         is_circular_padding=args.is_circular_padding,
         is_bias=not args.is_no_bias,
+        n_conv_layers=args.n_conv_layers,
     )
 
-    model_kwargs = _get_train_kwargs(args.model, **dict(lr=args.lr, batch_size=args.batch_size))
+    model_kwargs = _get_train_kwargs(
+        args.model, **dict(lr=args.lr, batch_size=args.batch_size)
+    )
 
     # TRAINING
     train(
@@ -241,13 +262,24 @@ def main(args):
 def parse_arguments(args_to_parse):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "model", type=str, help="Model.", choices=["AttnCNP", "SelfAttnCNP", "GridedCCP"]
+        "model",
+        type=str,
+        help="Model.",
+        choices=["AttnCNP", "SelfAttnCNP", "GridedCCP"],
     )
     parser.add_argument(
         "dataset",
         type=str,
         help="Dataset.",
-        choices=["celeba32", "celeba64", "svhn", "mnist", "zs-multi-mnist", "celeba", "zs-mnist"],
+        choices=[
+            "celeba32",
+            "celeba64",
+            "svhn",
+            "mnist",
+            "zs-multi-mnist",
+            "celeba",
+            "zs-mnist",
+        ],
     )
 
     # General optional args
@@ -259,7 +291,9 @@ def parse_arguments(args_to_parse):
     )
     general.add_argument("--lr", type=float, help="Learning rate.")
     general.add_argument("--batch-size", type=int, help="Batch size.")
-    general.add_argument("--max-epochs", default=100, type=int, help="Max number of epochs.")
+    general.add_argument(
+        "--max-epochs", default=100, type=int, help="Max number of epochs."
+    )
     general.add_argument("--runs", default=1, type=int, help="Number of runs.")
     general.add_argument(
         "--starting-run",
@@ -279,7 +313,9 @@ def parse_arguments(args_to_parse):
         type=str,
         help="Checkpoint and result directory.",
     )
-    general.add_argument("--patience", default=10, type=int, help="Patience for early stopping.")
+    general.add_argument(
+        "--patience", default=10, type=int, help="Patience for early stopping."
+    )
     general.add_argument(
         "--is-progressbar", action="store_true", help="Whether to use a progressbar."
     )
@@ -291,14 +327,24 @@ def parse_arguments(args_to_parse):
 
     # CCP options
     ccp = parser.add_argument_group("CCP Options")
-    ccp.add_argument("--n-blocks", default=5, type=int, help="Number of blocks to use in the CNN.")
-    ccp.add_argument("--init-kernel-size", type=int, help="Kernel size to use for the set cnn.")
-    ccp.add_argument("--kernel-size", type=int, help="Kernel size to use for the whole CNN.")
     ccp.add_argument(
-        "--is-rbf", action="store_true", help="Whether to use gaussian rbf as first layer."
+        "--n-blocks", default=5, type=int, help="Number of blocks to use in the CNN."
     )
     ccp.add_argument(
-        "--is-no-density", action="store_true", help="Whether not to add the density channel."
+        "--init-kernel-size", type=int, help="Kernel size to use for the set cnn."
+    )
+    ccp.add_argument(
+        "--kernel-size", type=int, help="Kernel size to use for the whole CNN."
+    )
+    ccp.add_argument(
+        "--is-rbf",
+        action="store_true",
+        help="Whether to use gaussian rbf as first layer.",
+    )
+    ccp.add_argument(
+        "--is-no-density",
+        action="store_true",
+        help="Whether not to add the density channel.",
     )
     ccp.add_argument(
         "--is-no-normalization", action="store_true", help="Whether not to normalize."
@@ -308,9 +354,20 @@ def parse_arguments(args_to_parse):
         action="store_true",
         help="Whether not to use absolute weights for the first layer.",
     )
-    ccp.add_argument("--is-no-bias", action="store_true", help="Whether not to use bias.")
     ccp.add_argument(
-        "--is-circular-padding", action="store_true", help="Whether to use reflect padding."
+        "--is-no-bias", action="store_true", help="Whether not to use bias."
+    )
+    ccp.add_argument(
+        "--is-circular-padding",
+        action="store_true",
+        help="Whether to use reflect padding.",
+    )
+    ccp.add_argument(
+        "--n-conv-layers",
+        default=1,
+        type=int,
+        choices=[1, 2],
+        help="How many convolutional layers to use per block.",
     )
 
     args = parser.parse_args(args_to_parse)
